@@ -36,7 +36,7 @@ module.exports = {
           viaIR: true
         }
       },
-   /*   {
+      {
         version: "0.6.6",
         settings: {
           optimizer: {
@@ -99,7 +99,6 @@ module.exports = {
           }
         }
       },
-      */
     ]
   },
   networks: {

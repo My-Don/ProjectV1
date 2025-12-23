@@ -104,16 +104,7 @@ module.exports = {
       chainId: 11155111,
        // 增加超时时间，防止网络问题
       timeout: 120000, // 120秒
-      gasPrice: "auto",
-      verify: {
-        etherscan: {
-          apiKey: process.env.ETHERSCAN_API_KEY,
-        },
-        sourcify: {
-          enabled: true,  // 启用 Sourcify 验证
-          endpoint: "https://repo.sourcify.dev", 
-        }
-      }
+      gasPrice: "auto"
     },
     bscTestnet: {
       url: process.env.BSCTEST_URL || "",
@@ -186,7 +177,7 @@ module.exports = {
     ]
   },
   sourcify: {
-    enabled: true,
+    enabled: false,
     apiUrl: "https://sourcify-api-monad.blockvision.org/",
     browserUrl: "https://monadvision.com"
   },

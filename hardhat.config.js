@@ -82,15 +82,6 @@ module.exports = {
         }
       },
       {
-        version: "0.4.0",
-        settings: {
-          optimizer: {
-            enabled: true,
-            runs: 200
-          }
-        }
-      },
-        {
         version: "0.4.19",
         settings: {
           optimizer: {
@@ -98,7 +89,7 @@ module.exports = {
             runs: 200
           }
         }
-      },
+      }
     ]
   },
   networks: {

@@ -123,7 +123,6 @@ contract ServerNodeBackup is
     mapping(uint256 => configNodeParams[]) public getBuyNodeById; // 通过ID查询节点
     mapping(address => uint256) public userPhysicalNodes;         // 用户物理节点数
 
-    // ==================== 修饰符 ====================
     modifier onlyEOA() {
         require(msg.sender == tx.origin, "Only EOA");
         _;
@@ -685,3 +684,4 @@ contract ServerNodeBackup is
         return (hasRewarded[user][year], lastUserRewardTime[user]);
     }
 }
+

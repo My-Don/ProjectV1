@@ -1,0 +1,22 @@
+node_modules
+package-lock.json
+.openzeppelin
+.env
+
+# Hardhat files
+/cache
+/artifacts
+
+# TypeChain files
+/typechain
+/typechain-types
+
+# solidity-coverage files
+/coverage
+/coverage.json
+
+/json
+/scripts/generate_json.js
+
+# Hardhat Ignition default folder for deployments against a local node
+ignition/deployments/chain-31337

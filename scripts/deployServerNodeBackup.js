@@ -17,7 +17,7 @@ async function main() {
 
 
   console.log("正在部署 ServerNodeBackup 合约...");
-  const contract = await upgrades.deployProxy(ServerNodeBackup, ["0x5159eA8501d3746bB07c20B5D0406bD12844D7ec", "0x2CE745237CFeF71f5E2e334130D041706f0b6f52", ["0xDfc38b97bCc82B16802e676fbB939623F9EA5b4f","0xeCe513834253230680a4D88D592E0bE79d1202Db","0xf9fFCDD58FA6c16F4E1d1A7180Ddb226dD87F32F"], 2], {
+  const contract = await upgrades.deployProxy(ServerNodeBackup, ["0x5159eA8501d3746bB07c20B5D0406bD12844D7ec", "0x3103b1b5a9f673e1674a9c0c3cBd5e07029492B9", "0x10Cd98b7DDaB859754AB67dD26fb3110609cCD03", ["0x5159eA8501d3746bB07c20B5D0406bD12844D7ec","0xDfc38b97bCc82B16802e676fbB939623F9EA5b4f","0xeCe513834253230680a4D88D592E0bE79d1202Db","0xf9fFCDD58FA6c16F4E1d1A7180Ddb226dD87F32F"], 2], {
     initializer: 'initialize',
   });
   await contract.waitForDeployment();

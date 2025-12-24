@@ -7,6 +7,7 @@ package-lock.json
 /cache
 /artifacts
 /ignition
+/coverage.json
 
 # TypeChain files
 /typechain

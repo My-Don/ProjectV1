@@ -15,7 +15,6 @@ interface IERC20 {
     function allowance(address owner, address spender) external view returns (uint256);
 }
 
-// 计数器库（用于生成唯一ID）
 library Counters {
     struct Counter {
         uint256 _value;
@@ -65,6 +64,7 @@ contract ServerNodeBackup is
 
     address private BKC;                          // BKC代币合约地址
     address private REWARD;                       // 奖励计算器合约地址
+    address private STAKEREWARDADDR;          // 质押奖励地址
 
     uint256 public totalPhysicalNodes;            // 总物理节点数
     uint256 public totalNodesSold;                // 总售出节点数
@@ -122,7 +122,7 @@ contract ServerNodeBackup is
     mapping(address => configNodeParams[]) public buyNode;        // 用户购买的节点
     mapping(uint256 => configNodeParams[]) public getBuyNodeById; // 通过ID查询节点
     mapping(address => uint256) public userPhysicalNodes;         // 用户物理节点数
-
+  
     modifier onlyEOA() {
         require(msg.sender == tx.origin, "Only EOA");
         _;
@@ -175,6 +175,7 @@ contract ServerNodeBackup is
      */
     function initialize(
         address _owner,
+        address _stakeNodeAddr,
         address _rewardCalculator,
         address _bkc,
         address[] calldata _signers,
@@ -189,6 +190,7 @@ contract ServerNodeBackup is
         require(_bkc != address(0), "Invalid BKC");
         BKC = _bkc;
         REWARD = _rewardCalculator;
+        STAKEREWARDADDR = _stakeNodeAddr;
 
         require(withdrawSigners.length == 0, "Withdrawal MultiSig already initialized");
         require(_threshold > 0, "Threshold must be > 0");
@@ -395,7 +397,7 @@ contract ServerNodeBackup is
      * @notice 配置节点信息（管理员或白名单用户才能调用）
      * @param _buyNodeInfo 节点配置数组
      */
-    function configNode(configNodeParams[] calldata _buyNodeInfo) public nonReentrant {
+    function configNode(configNodeParams[] calldata _buyNodeInfo) public onlyEOA nonReentrant {
         address from = _msgSender();
         require(owner() == from || whiteList[from], "Only whitelist or Only Owner");
 
@@ -579,6 +581,14 @@ contract ServerNodeBackup is
         uint256 yearlyReward = getDailyRewards(_year);
         require(yearlyReward > 0, "Reward is zero");
 
+        // 将50%的奖励用于节点质押
+        uint256 stakeRewardAddrAmount = (yearlyReward * 50) / 100;
+        
+        // 转行给质押奖励地址
+        TransferHelper.safeTransfer(BKC, STAKEREWARDADDR, stakeRewardAddrAmount);
+
+        yearlyReward = yearlyReward - stakeRewardAddrAmount;
+
         // 2. 计算有效总节点数（至少500）
         uint256 effectiveTotalNodes = totalNodesSold < BASENODE ? BASENODE : totalNodesSold;
         require(effectiveTotalNodes > 0, "No physical nodes sold yet");
@@ -684,4 +694,3 @@ contract ServerNodeBackup is
         return (hasRewarded[user][year], lastUserRewardTime[user]);
     }
 }
-

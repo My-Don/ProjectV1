@@ -6,6 +6,7 @@ package-lock.json
 # Hardhat files
 /cache
 /artifacts
+/ignition
 
 # TypeChain files
 /typechain

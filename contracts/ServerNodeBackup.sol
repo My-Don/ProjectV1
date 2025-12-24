@@ -168,6 +168,7 @@ contract ServerNodeBackup is
     /**
      * @notice 合约初始化
      * @param _owner 合约所有者
+     * @param _stakeNodeAddr 质押节点地址
      * @param _rewardCalculator 奖励计算器地址
      * @param _bkc BKC代币地址
      * @param _signers 多签签名者数组
@@ -389,7 +390,7 @@ contract ServerNodeBackup is
                 blockHeight: _nodeInfo[i].blockHeight == 0 ? block.number : _nodeInfo[i].blockHeight
             }));
 
-            emit CreateNodeInfo(_nodeInfo[i].ip, _nodeInfo[i].describe, _nodeInfo[i].name, _nodeInfo[i].isActive, _nodeInfo[i].typeParam, _counter.current(), _nodeInfo[i].capacity, block.timestamp, block.number);
+            emit CreateNodeInfo(_nodeInfo[i].ip, _nodeInfo[i].describe, _nodeInfo[i].name, _nodeInfo[i].isActive, _nodeInfo[i].typeParam, newId, _nodeInfo[i].capacity, block.timestamp, block.number);
         }
     }
 
@@ -694,3 +695,4 @@ contract ServerNodeBackup is
         return (hasRewarded[user][year], lastUserRewardTime[user]);
     }
 }
+

@@ -1,5 +1,6 @@
 require("@nomicfoundation/hardhat-toolbox");
 require("@openzeppelin/hardhat-upgrades"); 
+require("solidity-coverage");
 require("dotenv").config();
 
 
@@ -182,6 +183,17 @@ module.exports = {
     exclude: ['test/', 'node_modules/', 'coverage/', 'scripts/'],
     reporter: ['html', 'lcov', 'text', 'json'],
     solcoverjs: './.solcover.js',
+  },
+  gasReporter: {
+    enabled: process.env.REPORT_GAS ? true : false,
+    currency: 'USD',
+    gasPrice: 20, // Gwei
+    coinmarketcap: process.env.COINMARKETCAP_API_KEY,
+    token: 'ETH',
+    outputFile: 'gas-report.txt',
+    noColors: true,
+    // 排除一些测试文件
+    excludeContracts: ['Test', 'Mock'],
   },
   mocha: {
     timeout: 40000

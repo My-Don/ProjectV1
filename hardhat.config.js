@@ -176,6 +176,16 @@ module.exports = {
       }
     ]
   },
+  // 覆盖率配置
+  coverage: {
+    enabled: true,
+    exclude: ['test/', 'node_modules/', 'coverage/', 'scripts/'],
+    reporter: ['html', 'lcov', 'text', 'json'],
+    solcoverjs: './.solcover.js',
+  },
+  mocha: {
+    timeout: 40000
+  },
   sourcify: {
     enabled: false,
     apiUrl: "https://sourcify-api-monad.blockvision.org/",

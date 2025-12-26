@@ -7,14 +7,6 @@ import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@uniswap/lib/contracts/libraries/TransferHelper.sol";
 
-interface IERC20 {
-    function balanceOf(address account) external view returns (uint256);
-    function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-    function approve(address spender, uint256 amount) external returns (bool);
-    function allowance(address owner, address spender) external view returns (uint256);
-}
-
 library Counters {
     struct Counter {
         uint256 _value;
@@ -43,10 +35,18 @@ library Counters {
     }
 }
 
+interface IERC20 {
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address to, uint256 amount) external returns (bool);
+    function transferFrom(address from, address to, uint256 amount) external returns (bool);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+}
+
 /**
  * @title ServerNodeBackup
  * @notice 服务器节点合约
- * 功能：管理节点、分配奖励、多签提款、白名单控制
+ * 功能：可升级、管理节点、分配奖励、多签提款、白名单控制
  */
 contract ServerNodeBackup is
     Initializable,
@@ -64,7 +64,7 @@ contract ServerNodeBackup is
 
     address private BKC;                          // BKC代币合约地址
     address private REWARD;                       // 奖励计算器合约地址
-    address private STAKEREWARDADDR;          // 质押奖励地址
+    address private STAKEREWARDADDR;              // 质押奖励地址
 
     uint256 public totalPhysicalNodes;            // 总物理节点数
     uint256 public totalNodesSold;                // 总售出节点数
@@ -166,7 +166,7 @@ contract ServerNodeBackup is
     }
 
     /**
-     * @notice 合约初始化
+     * @notice 初始化
      * @param _owner 合约所有者
      * @param _stakeNodeAddr 质押节点地址
      * @param _rewardCalculator 奖励计算器地址
@@ -182,6 +182,7 @@ contract ServerNodeBackup is
         address[] calldata _signers,
         uint256 _threshold
     ) public initializer {
+        require(_owner != address(0), "Owner address is zero");
         __Ownable_init(msg.sender);
         transferOwnership(_owner);
         __ReentrancyGuard_init();
@@ -370,7 +371,7 @@ contract ServerNodeBackup is
      * @notice 管理员创建节点
      * @param _nodeInfo 节点信息数组
      */
-    function createNode(NodeInfo[] calldata _nodeInfo) public onlyOwner {
+    function createNode(NodeInfo[] calldata _nodeInfo) public onlyOwner nonReentrant {
         uint256 length = _nodeInfo.length;
         require(length > 0, "Node information cannot be an empty array.");
 
@@ -490,6 +491,7 @@ contract ServerNodeBackup is
      * @param _isTrue 是否加入白名单
      */
     function setWhiteList(address user, bool _isTrue) external onlyOwner {
+        require(user != address(0), "Invalid user address");
         whiteList[user] = _isTrue;
     }
 
@@ -574,8 +576,7 @@ contract ServerNodeBackup is
      * @dev 外部定时调用，给用户分配每日奖励
      */
     function configRewards(address[] calldata _users, uint16 _year) external onlyOwner nonReentrant whenNotPaused {
-        require(_users.length > 0, "Users array cannot be empty");
-        require(_users.length <= 50, "Too many users, maximum 50 per batch");
+        require(_users.length > 0 && _users.length <= 50, "Users information array must be between 1 and 50 items");
         require(_year >= 1 && _year <= 30, "Invalid year");
 
         // 1. 获取该年份的每日奖励基数
@@ -585,7 +586,7 @@ contract ServerNodeBackup is
         // 将50%的奖励用于节点质押
         uint256 stakeRewardAddrAmount = (yearlyReward * 50) / 100;
         
-        // 转行给质押奖励地址
+        // 转给质押奖励地址
         TransferHelper.safeTransfer(BKC, STAKEREWARDADDR, stakeRewardAddrAmount);
 
         yearlyReward = yearlyReward - stakeRewardAddrAmount;
@@ -695,4 +696,3 @@ contract ServerNodeBackup is
         return (hasRewarded[user][year], lastUserRewardTime[user]);
     }
 }
-

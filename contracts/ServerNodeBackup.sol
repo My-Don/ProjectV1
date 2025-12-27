@@ -643,11 +643,16 @@ contract ServerNodeBackup is
         }
 
         // 4. 如果有用户被奖励，触发批量事件
-        if (usersProcessed > 0) {
-            emit BatchRewardsDistributed(usersProcessed, totalDistributed, _year);
-        } else {
-            revert("No users were rewarded in this batch");
-        }
+        //if (usersProcessed > 0) {
+        //    emit BatchRewardsDistributed(usersProcessed, totalDistributed, _year);
+       // } else {
+            //revert("No users were rewarded in this batch");
+       // }
+        if (usersProcessed  == 0) {
+            emit BatchRewardsDistributed(0, 0, _year);
+         } else {
+            return;
+         }
     }
 
     /**
@@ -696,3 +701,4 @@ contract ServerNodeBackup is
         return (hasRewarded[user][year], lastUserRewardTime[user]);
     }
 }
+

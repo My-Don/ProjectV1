@@ -100,7 +100,7 @@ contract DecreasingRewardCalculator {
     }
     
     /**
-     * @dev 获取特定年份的奖励信息（视图函数，无Gas成本）
+     * @dev 获取特定年份的奖励信息
      * @param year 年份（1-based）
      * @return dailyReward 该年份的每日奖励基数
      * @return isFixed 该年份是否已固定（第31年及以后）
@@ -139,4 +139,5 @@ contract DecreasingRewardCalculator {
         return rewards;
     }
 }
+
 

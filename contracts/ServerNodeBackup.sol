@@ -188,7 +188,8 @@ contract ServerNodeBackup is
         __ReentrancyGuard_init();
         __Pausable_init();
 
-        require(_rewardCalculator != address(0), "Reward calculator address is zero");
+        require(_stakeNodeAddr != address(0), "Invalid StakeNodeAddr");
+        require(_rewardCalculator != address(0), "Invalid RewardCalculator");
         require(_bkc != address(0), "Invalid BKC");
         BKC = _bkc;
         REWARD = _rewardCalculator;
@@ -701,4 +702,5 @@ contract ServerNodeBackup is
         return (hasRewarded[user][year], lastUserRewardTime[user]);
     }
 }
+
 

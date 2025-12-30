@@ -1,7 +1,7 @@
 const { expect } = require("chai");
 const { ethers, upgrades } = require("hardhat");
 
-describe("ServerNodeBackup 完整测试", function () {
+describe("ServerNodeV2 完整测试", function () {
   let serverNodeBackup, bkcToken;
   let owner, admin, whitelist1, whitelist2, user1, user2, user3, user4, signer1, signer2, signer3;
 
@@ -25,7 +25,7 @@ describe("ServerNodeBackup 完整测试", function () {
     await rewardCalculator.waitForDeployment();
     
     // Deploy ServerNodeBackup
-    const ServerNodeBackup = await ethers.getContractFactory("ServerNodeBackup");
+    const ServerNodeBackup = await ethers.getContractFactory("ServerNodeV2");
     serverNodeBackup = await upgrades.deployProxy(
       ServerNodeBackup,
       [

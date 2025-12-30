@@ -11,11 +11,11 @@ async function main() {
   const [deployer] = await ethers.getSigners();
   console.log("使用账户地址部署:", deployer.address);
 
-  const ServerNodeBackup = await ethers.getContractFactory("ServerNodeV2");
+  const ServerNodeBackup = await ethers.getContractFactory("ServerNodeBackup");
 
 
   console.log("正在部署 ServerNodeBackup 合约...");
-  const contract = await upgrades.deployProxy(ServerNodeV2, ["0x5159eA8501d3746bB07c20B5D0406bD12844D7ec", "0xA23E1e37a4dF0742069552c0321CdFfE3C6647cd", "0xD8E5E2E22075881CDA8994989F93666d19B46EdE", "0x10Cd98b7DDaB859754AB67dD26fb3110609cCD03", ["0xDfc38b97bCc82B16802e676fbB939623F9EA5b4f", "0xeCe513834253230680a4D88D592E0bE79d1202Db", "0xf9fFCDD58FA6c16F4E1d1A7180Ddb226dD87F32F"], 2], {
+  const contract = await upgrades.deployProxy(ServerNodeBackup, ["0x5159eA8501d3746bB07c20B5D0406bD12844D7ec", "0xD8E5E2E22075881CDA8994989F93666d19B46EdE", "0x10Cd98b7DDaB859754AB67dD26fb3110609cCD03", ["0xDfc38b97bCc82B16802e676fbB939623F9EA5b4f", "0xeCe513834253230680a4D88D592E0bE79d1202Db", "0xf9fFCDD58FA6c16F4E1d1A7180Ddb226dD87F32F"], 2], {
     initializer: 'initialize',
   });
   await contract.waitForDeployment();

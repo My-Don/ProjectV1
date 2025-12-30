@@ -80,7 +80,6 @@ contract ServerNodeBackup is
 
     address private BKC; // BKC代币地址
     address private REWARD; // 奖励计算器地址
-    address private STAKEREWARDADDR; // 质押奖励地址
 
     uint256 public totalPhysicalNodesEquivalent; // 总物理节点等效值（已缩放）
     NodeInfo[] public deployNode; // 所有部署的节点信息数组
@@ -94,7 +93,8 @@ contract ServerNodeBackup is
     mapping(address => bool) private isWithdrawSigner; // 是否为签名人
 
     WithdrawalProposal[] private withdrawalProposals; // 提款提案数组
-    mapping(uint256 => mapping(address => bool)) private withdrawalConfirmations; // 提案确认记录
+    mapping(uint256 => mapping(address => bool))
+        private withdrawalConfirmations; // 提案确认记录
 
     // 提款提案结构：记录谁提议、转给谁、转多少
     struct WithdrawalProposal {
@@ -206,7 +206,10 @@ contract ServerNodeBackup is
 
     // 节点分配奖励未暂停时才能调用
     modifier whenNodeAllocationRewardNotPaused() {
-        require(!pausedNodeAllocationReward, "Node allocation reward is paused");
+        require(
+            !pausedNodeAllocationReward,
+            "Node allocation reward is paused"
+        );
         _;
     }
 
@@ -224,15 +227,17 @@ contract ServerNodeBackup is
     );
     event RewardDistributed(
         address indexed user,
-        uint256 indexed amount,
-        uint16 year
+        uint256  amount,
+        address indexed stakeAddress,
+        uint256  amount2,
+        uint16 indexed year
     );
     event RewardPaused(address indexed admin);
     event RewardUnpaused(address indexed admin);
     event BatchRewardsDistributed(
         uint256 indexed totalUsers,
         uint256 indexed totalAmount,
-        uint16 year
+        uint16 indexed year
     );
     event WithdrawSignerAdded(address indexed signer);
     event WithdrawSignerRemoved(address indexed signer);
@@ -285,7 +290,6 @@ contract ServerNodeBackup is
     /**
      * @dev 初始化合约
      * @param _owner 合约所有者
-     * @param _stakeNodeAddr 质押节点地址
      * @param _rewardCalculator 奖励计算器地址
      * @param _bkc BKC代币地址
      * @param _signers 多签签名人列表
@@ -293,7 +297,6 @@ contract ServerNodeBackup is
      */
     function initialize(
         address _owner,
-        address _stakeNodeAddr,
         address _rewardCalculator,
         address _bkc,
         address[] calldata _signers,
@@ -309,10 +312,8 @@ contract ServerNodeBackup is
             "Reward calculator address is zero"
         );
         require(_bkc != address(0), "Invalid BKC");
-        require(_stakeNodeAddr != address(0), "Invalid StakeNodeAddr");
         BKC = _bkc;
         REWARD = _rewardCalculator;
-        STAKEREWARDADDR = _stakeNodeAddr;
 
         require(
             withdrawSigners.length == 0,
@@ -692,7 +693,7 @@ contract ServerNodeBackup is
             i++
         ) {
             uint256 nodeId = deployNode[i].id;
-            
+
             // 跳过已被整机大节点锁定的节点
             if (isNodeAllocatedAsBig[nodeId]) {
                 continue;
@@ -740,6 +741,16 @@ contract ServerNodeBackup is
     ) external onlyAllocationAuthorized whenAllocationNotPaused {
         require(user != address(0), "Invalid user");
         require(stakeAddress != address(0), "Invalid stake address");
+        require(
+            user != stakeAddress,
+            "User and stake address cannot be the same"
+        );
+        require(
+            combination.mediumNodes > 0 ||
+                combination.smallNodes > 0 ||
+                combination.commodity > 0,
+            "At least one node or commodity required"
+        );
 
         // 计算总金额：中节点*20万 + 小节点*5万 + 商品金额
         uint256 totalAmount = uint256(combination.mediumNodes) *
@@ -794,17 +805,17 @@ contract ServerNodeBackup is
         // 查找一个有足够剩余容量的节点（剩余容量≥总金额）
         uint256 targetNodeId = 0;
         bool found = false;
-        
+
         for (uint256 i = 0; i < deployNode.length; i++) {
             uint256 nodeId = deployNode[i].id;
-            
+
             // 跳过已被分配为大节点的节点
             if (isNodeAllocatedAsBig[nodeId]) {
                 continue;
             }
-            
+
             uint256 available = nodeRemainingCapacity[nodeId];
-            
+
             // 找到剩余容量≥总金额的节点
             if (available >= totalAmount) {
                 targetNodeId = nodeId;
@@ -812,41 +823,59 @@ contract ServerNodeBackup is
                 break;
             }
         }
-        
+
         // 必须找到一个有足够容量的节点
-        require(found, "No node has sufficient capacity for combined allocation");
-        
+        require(
+            found,
+            "No node has sufficient capacity for combined allocation"
+        );
+
         // 在同一个节点内依次分配中节点、小节点、商品
         uint256 remainingCapacity = nodeRemainingCapacity[targetNodeId];
-        
+
         // 分配中节点（每个20万）
         if (combination.mediumNodes > 0) {
             uint256 mediumAmount = uint256(combination.mediumNodes) * 200_000;
-            require(remainingCapacity >= mediumAmount, "Insufficient capacity for medium nodes");
-            
+            require(
+                remainingCapacity >= mediumAmount,
+                "Insufficient capacity for medium nodes"
+            );
+
             for (uint8 i = 0; i < combination.mediumNodes; i++) {
                 _recordAllocation(user, stakeAddress, 2, 200_000, targetNodeId);
             }
             nodeRemainingCapacity[targetNodeId] -= mediumAmount;
             remainingCapacity -= mediumAmount;
         }
-        
+
         // 分配小节点（每个5万）
         if (combination.smallNodes > 0) {
             uint256 smallAmount = uint256(combination.smallNodes) * 50_000;
-            require(remainingCapacity >= smallAmount, "Insufficient capacity for small nodes");
-            
+            require(
+                remainingCapacity >= smallAmount,
+                "Insufficient capacity for small nodes"
+            );
+
             for (uint8 i = 0; i < combination.smallNodes; i++) {
                 _recordAllocation(user, stakeAddress, 3, 50_000, targetNodeId);
             }
             nodeRemainingCapacity[targetNodeId] -= smallAmount;
             remainingCapacity -= smallAmount;
         }
-        
+
         // 分配商品（任意金额）
         if (combination.commodity > 0) {
-            require(remainingCapacity >= combination.commodity, "Insufficient capacity for commodity");
-            _recordAllocation(user, stakeAddress, 4, combination.commodity, targetNodeId);
+            require(
+                remainingCapacity >= combination.commodity,
+                "Insufficient capacity for commodity"
+            );
+            _recordAllocation(
+                user,
+                stakeAddress,
+                4,
+                combination.commodity,
+                targetNodeId
+            );
             nodeRemainingCapacity[targetNodeId] -= combination.commodity;
         }
     }
@@ -868,6 +897,10 @@ contract ServerNodeBackup is
     ) internal {
         require(user != address(0), "Invalid user");
         require(stakeAddress != address(0), "Invalid stake address");
+        require(
+            user != stakeAddress,
+            "User and stake address cannot be the same"
+        );
         require(nodeType >= 1 && nodeType <= 4, "Invalid node type");
 
         uint256 allocatedCapacity;
@@ -969,12 +1002,12 @@ contract ServerNodeBackup is
 
         for (uint i = 0; i < deployNode.length && remaining > 0; i++) {
             uint256 nodeId = deployNode[i].id;
-            
+
             // 跳过已被分配为大节点的节点
             if (isNodeAllocatedAsBig[nodeId]) {
                 continue;
             }
-            
+
             uint256 available = nodeRemainingCapacity[nodeId];
 
             // 如果节点剩余容量≥20万，可以分配中节点
@@ -1026,12 +1059,12 @@ contract ServerNodeBackup is
 
         for (uint i = 0; i < deployNode.length && remaining > 0; i++) {
             uint256 nodeId = deployNode[i].id;
-            
+
             // 跳过已被分配为大节点的节点
             if (isNodeAllocatedAsBig[nodeId]) {
                 continue;
             }
-            
+
             uint256 available = nodeRemainingCapacity[nodeId];
 
             // 如果节点剩余容量≥5万，可以分配小节点
@@ -1082,12 +1115,12 @@ contract ServerNodeBackup is
 
         for (uint i = 0; i < deployNode.length && remaining > 0; i++) {
             uint256 nodeId = deployNode[i].id;
-            
+
             // 跳过已被分配为大节点的节点
             if (isNodeAllocatedAsBig[nodeId]) {
                 continue;
             }
-            
+
             uint256 available = nodeRemainingCapacity[nodeId];
 
             // 如果节点剩余容量≥还需要分配的金额，一次性分配完
@@ -1305,23 +1338,31 @@ contract ServerNodeBackup is
      */
     function configRewards(
         address[] calldata _users,
+        address[] calldata _stakeAddresses,
         uint16 _year
-    ) external onlyOwner nonReentrant whenNotPaused whenNodeAllocationRewardNotPaused {
-        require(_users.length > 0, "Users array cannot be empty");
-        require(_users.length <= 50, "Too many users, maximum 50 per batch");
+    )
+        external
+        onlyOwner
+        nonReentrant
+        whenNotPaused
+        whenNodeAllocationRewardNotPaused
+    {
+        require(
+            _users.length > 0 && _stakeAddresses.length > 0,
+            "Users array cannot be empty"
+        );
+        require(
+            _users.length <= 50 && _stakeAddresses.length <= 50,
+            "Too many users, maximum 50 per batch"
+        );
         require(_year >= 1 && _year <= 30, "Invalid year");
 
         // 获取年度每日奖励
         uint256 yearlyReward = getDailyRewards(_year);
         require(yearlyReward > 0, "Reward is zero");
 
-        // 50%转给质押地址
+        // 50%给质押地址
         uint256 stakeRewardAddrAmount = (yearlyReward * 50) / 100;
-        TransferHelper.safeTransfer(
-            BKC,
-            STAKEREWARDADDR,
-            stakeRewardAddrAmount
-        );
         yearlyReward -= stakeRewardAddrAmount;
 
         // 计算有效总量（如果总等效值小于基础节点，使用基础节点）
@@ -1336,9 +1377,14 @@ contract ServerNodeBackup is
         uint256 usersProcessed = 0;
 
         // 遍历用户，按比例分发奖励
-        for (uint256 i = 0; i < _users.length; i++) {
+        for (
+            uint256 i = 0;
+            i < _users.length && i < _stakeAddresses.length;
+            i++
+        ) {
             address user = _users[i];
-            require(user != address(0), "Invalid user address");
+            address stakeAddress = _stakeAddresses[i];
+            require(user != address(0) && stakeAddress != address(0) && user != stakeAddress, "Invalid user or stake address");
 
             uint256 userEquivalent = userPhysicalNodesEquivalent[user];
             if (userEquivalent == 0) continue; // 用户没有节点，跳过
@@ -1356,13 +1402,16 @@ contract ServerNodeBackup is
                 "Insufficient contract balance"
             );
 
-            // 转账奖励
+            // 转账给购买节点的用户奖励
             TransferHelper.safeTransfer(BKC, user, rewardAmount);
+            // 转账给质押节点地址奖励
+            TransferHelper.safeTransfer(BKC, stakeAddress, stakeRewardAddrAmount);
             lastRewardDay[user][_year] = currentDay; // 记录领取日期
-
+    
             totalDistributed += rewardAmount;
+            totalDistributed += stakeRewardAddrAmount;
             usersProcessed++;
-            emit RewardDistributed(user, rewardAmount, _year);
+            emit RewardDistributed(user, rewardAmount, stakeAddress, stakeRewardAddrAmount, _year);
         }
 
         emit BatchRewardsDistributed(usersProcessed, totalDistributed, _year);
@@ -1428,4 +1477,3 @@ contract ServerNodeBackup is
         return (lastRewardDay[user][year] > 0, lastRewardDay[user][year]);
     }
 }
-

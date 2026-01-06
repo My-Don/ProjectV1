@@ -7,104 +7,80 @@ import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@uniswap/lib/contracts/libraries/TransferHelper.sol";
 
+// 生成节点ID
 library Counters {
     struct Counter {
-        uint256 _value;
+        uint256 _value; // 当前计数值
     }
 
     function current(Counter storage counter) internal view returns (uint256) {
-        return counter._value;
+        return counter._value; // 获取当前值
     }
 
     function increment(Counter storage counter) internal {
         unchecked {
-            counter._value += 1;
+            counter._value += 1; // 加1
         }
     }
 
     function decrement(Counter storage counter) internal {
         uint256 value = counter._value;
-        require(value > 0, "Counter: decrement overflow");
+        require(value > 0, "Counter: decrement overflow"); // 不能减到负数
         unchecked {
-            counter._value = value - 1;
+            counter._value = value - 1; // 减1
         }
     }
 
     function reset(Counter storage counter) internal {
-        counter._value = 0;
+        counter._value = 0; // 重置为0
     }
 }
 
-interface IERC20 {
-    function balanceOf(address account) external view returns (uint256);
-
-    function transfer(address to, uint256 amount) external returns (bool);
-
-    function transferFrom(
-        address from,
-        address to,
-        uint256 amount
-    ) external returns (bool);
-
-    function approve(address spender, uint256 amount) external returns (bool);
-
-    function allowance(
-        address owner,
-        address spender
-    ) external view returns (uint256);
-}
-
 /**
- * @title ServerNodeBackup
- * @notice 服务器节点管理合约
- * @dev 可升级的, 节点创建、分配节点、奖励、多签提款、白名单控制等功能
+ * @title 服务器节点管理合约
+ * @notice 管理节点创建、分配、奖励等所有功能
+ * @dev 可升级，确保安全可靠
  */
-contract ServerNodeBackup is
+contract ServerNodeV2Backup is
     Initializable,
     OwnableUpgradeable,
     ReentrancyGuardUpgradeable,
     PausableUpgradeable
 {
-    // ====== 常量配置 ======
-    uint256 public constant BIGNODE = 2000; // 最大物理节点数量
-    uint256 public constant BASENODE = 500; // 基础节点数量（用于奖励计算）
-    uint256 public constant MAX_WHITELIST = 3; // 白名单最大数量
-    uint256 public constant DEFAULT_CAPACITY = 1_000_000; // 每个节点的默认容量（100万）
-    uint256 public constant MAX_NODE_CAPACITY = 10_000_000; // 节点最大容量
-    uint256 public constant SECONDS_PER_DAY = 86400; // 每天的秒数
-    uint256 private constant SCALE = 1e6; // 精度缩放因子，用于计算等效值
+    // ====== 基本配置 ======
+    uint256 public constant BIGNODE = 2000; // 最多2000个物理节点
+    uint256 public constant BASENODE = 500; // 基础节点数，用来算奖励
+    uint256 public constant MAX_WHITELIST = 3; // 白名单最多3个人
+    uint256 public constant DEFAULT_CAPACITY = 1_000_000; // 每个节点100万容量
+    uint256 public constant SECONDS_PER_DAY = 86400; // 一天多少秒
+    uint256 private constant SCALE = 1e6; // 精度放大倍数，用来算等效值
 
-    // ====== 核心状态变量 ======
+    // ====== 核心数据 ======
     using Counters for Counters.Counter;
-    Counters.Counter private _counter; // 节点ID计数器
+    Counters.Counter private _counter; // 用来生成节点ID的计数器
 
-    address private BKC; // BKC代币地址
-    address private REWARD; // 奖励计算器地址
+    address private REWARD; // 奖励计算器的地址
+    uint256 public totalPhysicalNodesEquivalent; // 所有人总共买了多少节点的等效值
+    NodeInfo[] public deployNode; // 所有已创建的节点
 
-    uint256 public totalPhysicalNodesEquivalent; // 总物理节点等效值（已缩放）
-    NodeInfo[] public deployNode; // 所有部署的节点信息数组
-
-    mapping(address => uint256) public userPhysicalNodesEquivalent; // 用户物理节点等效值（已缩放）
-    mapping(address => mapping(uint16 => uint256)) public lastRewardDay; // 用户每年最后领取奖励的日期
+    mapping(address => uint256) public userPhysicalNodesEquivalent; // 每个人买了多少节点的等效值
+    mapping(address => mapping(uint16 => uint256)) public lastRewardDay; // 每个人每年最后领奖励是哪天
 
     // ====== 多签提款系统 ======
     address[] private withdrawSigners; // 多签签名人列表
-    uint256 private withdrawThreshold; // 提款所需的最小确认数
-    mapping(address => bool) private isWithdrawSigner; // 是否为签名人
+    uint256 private withdrawThreshold; // 需要几个签名人同意才能提款
+    mapping(address => bool) private isWithdrawSigner; // 记录谁是多签签名人
+    WithdrawalProposal[] private withdrawalProposals; // 所有的提款申请
+    mapping(uint256 => mapping(address => bool)) private withdrawalConfirmations; // 谁确认了哪个申请
 
-    WithdrawalProposal[] private withdrawalProposals; // 提款提案数组
-    mapping(uint256 => mapping(address => bool))
-        private withdrawalConfirmations; // 提案确认记录
-
-    // 提款提案结构：记录谁提议、转给谁、转多少
+    // 提款申请的结构
     struct WithdrawalProposal {
-        address proposer; // 提案人
-        address token; // 代币地址
-        address payable recipient; // 收款人
-        uint256 amount; // 金额
-        uint256 confirmations; // 确认数
-        bool executed; // 是否已执行
-        uint256 createdAt; // 创建时间
+        address proposer; // 谁提的申请
+        address payable recipient; // 钱转给谁
+        uint256 amount; // 转多少钱
+        uint256 confirmations; // 几个人同意了
+        bool executed; // 执行了没
+        uint256 createdAt; // 什么时候创建的
     }
 
     // ====== 节点信息结构 ======
@@ -113,22 +89,22 @@ contract ServerNodeBackup is
         string describe; // 描述
         string name; // 节点名称
         bool isActive; // 是否激活
+        address nodeStakeAddress; // 节点质押地址
         uint8 typeParam; // 节点类型参数
         uint256 id; // 节点ID
-        uint256 capacity; // 节点容量
+        uint256 capacity; // 节点容量（固定100万）
         uint256 createTime; // 创建时间
         uint256 blockHeight; // 创建时的区块高度
     }
 
-    // ====== 组合分配结构 ======
-    // 用于组合分配：中节点+小节点+商品（总金额不超过100万）
+    // 组合分配的结构：中节点+小节点+商品
     struct NodeCombination {
         uint8 mediumNodes; // 中节点数量（每个20万）
         uint8 smallNodes; // 小节点数量（每个5万）
         uint256 commodity; // 商品金额（1-100万之间）
     }
 
-    // 分配记录：记录每次分配的详细信息
+    // 分配记录的结构：每次分配记下来
     struct AllocationRecord {
         uint256 timestamp; // 分配时间
         address user; // 用户地址
@@ -138,7 +114,7 @@ contract ServerNodeBackup is
         uint256 nodeId; // 关联的节点ID
     }
 
-    // ====== 批量分配结构 ======
+    // 批量分配的结构
     struct Allocation {
         address user; // 用户地址
         address stakeAddress; // 质押地址
@@ -147,69 +123,58 @@ contract ServerNodeBackup is
         uint256 amount; // 金额（用于商品）
     }
 
-    // ====== 白名单 ======
-    mapping(address => bool) public whiteList; // 白名单映射
-    uint256 public currentWhitelistCount; // 当前白名单数量
+    // ====== 各种映射和数组 ======
+    mapping(address => bool) public whiteList; // 白名单
+    uint256 public currentWhitelistCount; // 当前白名单人数
+    
+    mapping(uint256 => uint256) public nodeTotalAllocated; // 每个节点总共分配了多少金额（关键）
+    mapping(uint256 => bool) public isNodeAllocatedAsBig; // 节点是否被分配成大节点了
+    mapping(uint256 => uint256) public nodeIndexById; // 节点ID对应的数组位置，查找更快
+    
+    mapping(address => AllocationRecord[]) public userAllocationRecords; // 每个人的分配记录
+    mapping(uint256 => AllocationRecord[]) public nodeAllocationRecords; // 每个节点的分配记录
+    
+    mapping(bytes32 => bool) private _usedIPs; // 用过的IP地址，确保IP唯一
 
-    // ====== 容量与分配记录 ======
-    mapping(uint256 => uint256) public nodeRemainingCapacity; // 节点剩余容量
-    mapping(uint256 => bool) public isNodeAllocatedAsBig; // 节点是否已被分配为大节点（整机独占）
-
-    mapping(address => AllocationRecord[]) public userAllocationRecords; // 用户的分配记录
-    mapping(uint256 => AllocationRecord[]) public nodeAllocationRecords; // 节点的分配记录
-
+    // ====== 控制开关 ======
     bool public pausedNodeAllocation; // 节点分配是否暂停
     bool public pausedNodeAllocationReward; // 节点分配奖励是否暂停
 
-    // ====== IP 唯一性 ======
-    mapping(bytes32 => bool) private _usedIPs; // 已使用的IP地址（用哈希存储）
-
+    // ====== 权限修饰符 ======
     // 只有多签签名人才能调用
     modifier onlyWithdrawMultiSig() {
         require(isWithdrawSigner[msg.sender], "Not authorized");
         _;
     }
 
-    // 检查提款提案是否存在且未执行
+    // 检查提款申请是否存在且没执行
     modifier withdrawalProposalExists(uint256 proposalId) {
-        require(
-            proposalId < withdrawalProposals.length,
-            "Proposal does not exist"
-        );
+        require(proposalId < withdrawalProposals.length, "Proposal does not exist");
         require(!withdrawalProposals[proposalId].executed, "Already executed");
         _;
     }
 
-    // 检查是否已确认过该提案
+    // 检查签名人是否确认过这个申请
     modifier notWithdrawConfirmed(uint256 proposalId) {
-        require(
-            !withdrawalConfirmations[proposalId][msg.sender],
-            "Already confirmed"
-        );
+        require(!withdrawalConfirmations[proposalId][msg.sender], "Already confirmed");
         _;
     }
 
-    // 只有管理员或白名单用户才能调用
+    // 只有管理员或白名单才能分配节点
     modifier onlyAllocationAuthorized() {
-        require(
-            msg.sender == owner() || whiteList[msg.sender],
-            "Only owner or whitelist"
-        );
+        require(msg.sender == owner() || whiteList[msg.sender], "Only owner or whitelist");
         _;
     }
 
-    // 节点分配未暂停时才能调用
+    // 节点分配没暂停时才能调用
     modifier whenAllocationNotPaused() {
         require(!pausedNodeAllocation, "Node allocation is paused");
         _;
     }
 
-    // 节点分配奖励未暂停时才能调用
+    // 节点分配奖励没暂停时才能调用
     modifier whenNodeAllocationRewardNotPaused() {
-        require(
-            !pausedNodeAllocationReward,
-            "Node allocation reward is paused"
-        );
+        require(!pausedNodeAllocationReward, "Node allocation reward is paused");
         _;
     }
 
@@ -217,19 +182,20 @@ contract ServerNodeBackup is
     event CreateNodeInfo(
         string indexed ip,
         string describe,
-        string indexed name,
+        string name,
         bool isActive,
+        address indexed nodeStakeAddress,
         uint8 typeParam,
-        uint256 id,
-        uint256 indexed capacity,
+        uint256 indexed id,
+        uint256 capacity,
         uint256 blockTime,
         uint256 blockHeight
     );
     event RewardDistributed(
         address indexed user,
-        uint256  amount,
+        uint256 amount,
         address indexed stakeAddress,
-        uint256  amount2,
+        uint256 amount2,
         uint16 indexed year
     );
     event RewardPaused(address indexed admin);
@@ -246,8 +212,7 @@ contract ServerNodeBackup is
     event WithdrawalProposalSubmitted(
         uint256 indexed proposalId,
         address indexed proposer,
-        address indexed token,
-        address recipient,
+        address indexed recipient,
         uint256 amount
     );
     event WithdrawalProposalConfirmed(
@@ -257,8 +222,7 @@ contract ServerNodeBackup is
     event WithdrawalProposalExecuted(
         uint256 indexed proposalId,
         address indexed executor,
-        address indexed token,
-        address recipient,
+        address indexed recipient,
         uint256 amount
     );
     event NodeAllocated(
@@ -281,6 +245,25 @@ contract ServerNodeBackup is
         uint256 commodity,
         uint256 totalAmount
     );
+    event FlexibleCombinationAllocated(
+        address indexed user,
+        address indexed stakeAddress,
+        uint8 mediumNodes,
+        uint8 smallNodes,
+        uint256 commodity,
+        uint256 totalAmount
+    );
+    event InvestmentVerified(
+        address indexed user,
+        uint8 nodeType,
+        uint256 quantity,
+        uint256 investmentAmount,
+        uint256 expectedAmount,
+        bool verified
+    );
+
+
+    mapping(bytes32 => uint256) public nodeIdByIP; // 通过IP查节点ID
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -288,42 +271,31 @@ contract ServerNodeBackup is
     }
 
     /**
-     * @dev 初始化合约
-     * @param _owner 合约所有者
+     * @dev 初始化
+     * @param _owner 合约管理员
      * @param _rewardCalculator 奖励计算器地址
-     * @param _bkc BKC代币地址
      * @param _signers 多签签名人列表
-     * @param _threshold 提款所需的最小确认数
+     * @param _threshold 需要几个签名人同意
      */
     function initialize(
         address _owner,
         address _rewardCalculator,
-        address _bkc,
         address[] calldata _signers,
         uint256 _threshold
     ) public initializer {
-        require(_owner != address(0), "Owner address is zero");
         __Ownable_init(_owner);
         __ReentrancyGuard_init();
         __Pausable_init();
 
-        require(
-            _rewardCalculator != address(0),
-            "Reward calculator address is zero"
-        );
-        require(_bkc != address(0), "Invalid BKC");
-        BKC = _bkc;
-        REWARD = _rewardCalculator;
-
-        require(
-            withdrawSigners.length == 0,
-            "Withdrawal MultiSig already initialized"
-        );
+        // 检查参数是否合法
+        require(_owner != address(0), "Owner address is zero");
+        require(_rewardCalculator != address(0), "Reward calculator address is zero");
+        require(withdrawSigners.length == 0, "Withdrawal MultiSig already initialized");
         require(_threshold > 0, "Threshold must be > 0");
-        require(
-            _threshold <= _signers.length,
-            "Threshold exceeds signers count"
-        );
+        require(_threshold <= _signers.length, "Threshold exceeds signers count");
+
+        // 设置奖励计算器
+        REWARD = _rewardCalculator;
 
         // 初始化多签签名人
         for (uint i = 0; i < _signers.length; i++) {
@@ -334,290 +306,74 @@ contract ServerNodeBackup is
             emit WithdrawSignerAdded(_signers[i]);
         }
 
+        // 设置提款阈值
         withdrawThreshold = _threshold;
         emit WithdrawThresholdUpdated(_threshold);
         emit WithdrawMultiSigInitialized(_signers, _threshold);
     }
 
-    // ==================== 多签管理 ====================
+    // ==================== 1）节点创建与管理 ====================
     /**
-     * @dev 添加多签签名人
-     * @param _signer 要添加的签名人地址
-     */
-    function addWithdrawSigner(address _signer) external onlyWithdrawMultiSig {
-        require(_signer != address(0), "Invalid address");
-        require(!isWithdrawSigner[_signer], "Already a signer");
-        withdrawSigners.push(_signer);
-        isWithdrawSigner[_signer] = true;
-        emit WithdrawSignerAdded(_signer);
-    }
-
-    /**
-     * @dev 移除多签签名人
-     * @param _signer 要移除的签名人地址
-     */
-    function removeWithdrawSigner(
-        address _signer
-    ) external onlyWithdrawMultiSig {
-        require(isWithdrawSigner[_signer], "Not a signer");
-        require(
-            withdrawSigners.length > withdrawThreshold,
-            "Cannot remove below threshold"
-        );
-        // 从数组中移除（用最后一个元素替换，然后删除最后一个）
-        for (uint i = 0; i < withdrawSigners.length; i++) {
-            if (withdrawSigners[i] == _signer) {
-                withdrawSigners[i] = withdrawSigners[
-                    withdrawSigners.length - 1
-                ];
-                withdrawSigners.pop();
-                break;
-            }
-        }
-        delete isWithdrawSigner[_signer];
-        emit WithdrawSignerRemoved(_signer);
-    }
-
-    /**
-     * @dev 更新提款阈值（所需的最小确认数）
-     * @param _threshold 新的阈值
-     */
-    function updateWithdrawThreshold(
-        uint256 _threshold
-    ) external onlyWithdrawMultiSig {
-        require(_threshold > 0, "Threshold must be > 0");
-        require(
-            _threshold <= withdrawSigners.length,
-            "Threshold exceeds signers count"
-        );
-        withdrawThreshold = _threshold;
-        emit WithdrawThresholdUpdated(_threshold);
-    }
-
-    // ==================== 提款提案 ====================
-    /**
-     * @dev 创建提款提案
-     * @param _token 代币地址（必须是BKC）
-     * @param _recipient 收款人地址
-     * @param _amount 提款金额
-     * @return proposalId 提案ID
-     */
-    function proposeWithdrawal(
-        address _token,
-        address payable _recipient,
-        uint256 _amount
-    ) external onlyWithdrawMultiSig returns (uint256 proposalId) {
-        require(_token != address(0) && _token == BKC, "Invalid token address");
-        require(_recipient != address(0), "Invalid recipient address");
-        require(_amount > 0, "Amount must be > 0");
-        uint256 balance = IERC20(_token).balanceOf(address(this));
-        require(balance >= _amount, "Insufficient contract balance");
-
-        proposalId = withdrawalProposals.length;
-        withdrawalProposals.push(
-            WithdrawalProposal({
-                proposer: msg.sender,
-                token: _token,
-                recipient: _recipient,
-                amount: _amount,
-                confirmations: 0,
-                executed: false,
-                createdAt: block.timestamp
-            })
-        );
-        emit WithdrawalProposalSubmitted(
-            proposalId,
-            msg.sender,
-            _token,
-            _recipient,
-            _amount
-        );
-        return proposalId;
-    }
-
-    /**
-     * @dev 确认提款提案
-     * @param proposalId 提案ID
-     */
-    function confirmWithdrawal(
-        uint256 proposalId
-    )
-        external
-        onlyWithdrawMultiSig
-        withdrawalProposalExists(proposalId)
-        notWithdrawConfirmed(proposalId)
-    {
-        WithdrawalProposal storage proposal = withdrawalProposals[proposalId];
-        proposal.confirmations += 1;
-        withdrawalConfirmations[proposalId][msg.sender] = true;
-        emit WithdrawalProposalConfirmed(proposalId, msg.sender);
-    }
-
-    /**
-     * @dev 执行提款提案（需要达到阈值）
-     * @param proposalId 提案ID
-     */
-    function executeWithdrawal(
-        uint256 proposalId
-    ) external withdrawalProposalExists(proposalId) nonReentrant {
-        WithdrawalProposal storage proposal = withdrawalProposals[proposalId];
-        require(
-            proposal.confirmations >= withdrawThreshold,
-            "Not enough confirmations"
-        );
-        require(!proposal.executed, "Already executed");
-        proposal.executed = true;
-        TransferHelper.safeTransfer(
-            proposal.token,
-            proposal.recipient,
-            proposal.amount
-        );
-        emit WithdrawalProposalExecuted(
-            proposalId,
-            msg.sender,
-            proposal.token,
-            proposal.recipient,
-            proposal.amount
-        );
-    }
-
-    /**
-     * @dev 确认并执行提款提案（如果确认数刚好达到阈值，则立即执行）
-     * @param proposalId 提案ID
-     */
-    function confirmAndExecuteWithdrawal(
-        uint256 proposalId
-    )
-        external
-        onlyWithdrawMultiSig
-        withdrawalProposalExists(proposalId)
-        notWithdrawConfirmed(proposalId)
-        nonReentrant
-    {
-        WithdrawalProposal storage proposal = withdrawalProposals[proposalId];
-        proposal.confirmations += 1;
-        withdrawalConfirmations[proposalId][msg.sender] = true;
-        emit WithdrawalProposalConfirmed(proposalId, msg.sender);
-        // 如果确认数达到阈值，立即执行
-        if (proposal.confirmations >= withdrawThreshold && !proposal.executed) {
-            proposal.executed = true;
-            TransferHelper.safeTransfer(
-                proposal.token,
-                proposal.recipient,
-                proposal.amount
-            );
-            emit WithdrawalProposalExecuted(
-                proposalId,
-                msg.sender,
-                proposal.token,
-                proposal.recipient,
-                proposal.amount
-            );
-        }
-    }
-
-    /**
-     * @dev 查询提款提案信息
-     * @param proposalId 提案ID
-     */
-    function getWithdrawalProposal(
-        uint256 proposalId
-    )
-        external
-        view
-        returns (
-            address proposer,
-            address token,
-            address payable recipient,
-            uint256 amount,
-            uint256 confirmations,
-            bool executed,
-            uint256 createdAt
-        )
-    {
-        require(
-            proposalId < withdrawalProposals.length,
-            "Withdrawal proposal does not exist"
-        );
-        WithdrawalProposal storage p = withdrawalProposals[proposalId];
-        return (
-            p.proposer,
-            p.token,
-            p.recipient,
-            p.amount,
-            p.confirmations,
-            p.executed,
-            p.createdAt
-        );
-    }
-
-    /**
-     * @dev 查询签名人是否已确认提案
-     * @param proposalId 提案ID
-     * @param signer 签名人地址
-     */
-    function hasWithdrawalConfirmed(
-        uint256 proposalId,
-        address signer
-    ) external view returns (bool) {
-        return withdrawalConfirmations[proposalId][signer];
-    }
-
-    // ==================== 创建节点 ====================
-    /**
-     * @dev 创建节点（只有管理员可以调用）
-     * @param _nodeInfo 节点信息数组
-     * @notice 每个节点容量固定为100万，IP地址必须唯一
+     * @dev 创建新节点（只有管理员能调用）
+     * @param _nodeInfo 要创建的节点信息数组
+     * 功能：1.检查IP是否唯一 2.设置固定容量100万 3.记录节点信息
      */
     function createNode(
         NodeInfo[] calldata _nodeInfo
     ) public onlyOwner nonReentrant {
         require(_nodeInfo.length > 0, "Node information cannot be empty");
-        require(
-            deployNode.length + _nodeInfo.length <= BIGNODE,
-            "Exceeds max physical nodes (2000)"
-        );
+        require(deployNode.length + _nodeInfo.length <= BIGNODE, "Exceeds max physical nodes (2000)");
 
         for (uint256 i = 0; i < _nodeInfo.length; i++) {
-            // 检查IP地址唯一性
+            // 1. 检查IP地址是否唯一（用哈希值比较）
             bytes32 ipHash = keccak256(bytes(_nodeInfo[i].ip));
             require(!_usedIPs[ipHash], "IP address must be unique");
-            _usedIPs[ipHash] = true;
+            _usedIPs[ipHash] = true; // 标记这个IP已使用
 
-            // 节点容量固定为100万
+            // 2. 所有节点容量固定为100万
             uint256 capacity = DEFAULT_CAPACITY;
 
             // 生成新的节点ID
             _counter.increment();
             uint256 newId = _counter.current();
+            uint256 newIndex = deployNode.length; // 新节点在数组中的位置
 
-            // 保存节点信息
+
+            // 只有分配才有节点类型的区分,所有默认都是大节点
+            uint8 nodeType = 1;
+
+            // 3. 保存节点信息到数组
             deployNode.push(
                 NodeInfo({
                     ip: _nodeInfo[i].ip,
                     describe: _nodeInfo[i].describe,
                     name: _nodeInfo[i].name,
                     isActive: _nodeInfo[i].isActive,
-                    typeParam: _nodeInfo[i].typeParam,
+                    nodeStakeAddress: _nodeInfo[i].nodeStakeAddress,
+                    typeParam: nodeType,
                     id: newId,
                     capacity: capacity,
-                    createTime: _nodeInfo[i].createTime == 0
-                        ? block.timestamp
-                        : _nodeInfo[i].createTime,
-                    blockHeight: _nodeInfo[i].blockHeight == 0
-                        ? block.number
-                        : _nodeInfo[i].blockHeight
+                    createTime: _nodeInfo[i].createTime == 0 ? block.timestamp : _nodeInfo[i].createTime,
+                    blockHeight: _nodeInfo[i].blockHeight == 0 ? block.number : _nodeInfo[i].blockHeight
                 })
             );
 
-            // 初始化节点剩余容量
-            nodeRemainingCapacity[newId] = capacity;
+            // 优化：记录节点ID对应的数组位置，查找更快
+            nodeIndexById[newId] = newIndex;
+            
+            // 初始化：这个节点还没分配过任何金额
+            nodeTotalAllocated[newId] = 0;
 
+            // 通过IP哈希记录节点ID，方便后续查询
+            nodeIdByIP[ipHash] = newId; 
+
+            // 触发创建节点事件
             emit CreateNodeInfo(
                 _nodeInfo[i].ip,
                 _nodeInfo[i].describe,
                 _nodeInfo[i].name,
                 _nodeInfo[i].isActive,
+                _nodeInfo[i].nodeStakeAddress,
                 _nodeInfo[i].typeParam,
                 newId,
                 capacity,
@@ -627,16 +383,44 @@ contract ServerNodeBackup is
         }
     }
 
-    // ==================== 分配逻辑 ====================
+    // ==================== 2）管理配置用户投资与分配 ====================
+
     /**
-     * @dev 批量分配节点
-     * @param allocations 分配数组（最多20个）
-     * @notice 只有管理员或白名单用户可以调用，分配未暂停时才能调用
+     * @dev 设置白名单（只有管理员能调用）
+     * @param user 要设置的用户地址
+     * @param _isTrue true=加入白名单，false=移除白名单
+     * 限制：白名单最多只能有3个人
+     */
+    function setWhiteList(address user, bool _isTrue) external onlyOwner {
+        require(user != address(0), "Invalid user address");
+        
+        if (_isTrue) {
+            // 添加白名单
+            require(currentWhitelistCount < MAX_WHITELIST, "Max whitelist limit reached");
+            require(!whiteList[user], "User already whitelisted");
+            whiteList[user] = true;
+            currentWhitelistCount++;
+        } else {
+            // 移除白名单
+            if (whiteList[user]) {
+                whiteList[user] = false;
+                currentWhitelistCount--;
+            }
+        }
+        emit WhitelistUpdated(user, _isTrue);
+    }
+
+    /**
+     * @dev 批量分配节点（一次最多20个）
+     * @param allocations 分配信息数组
+     * 权限：只有管理员或白名单用户能调用
      */
     function allocateNodesBatch(
         Allocation[] calldata allocations
     ) external onlyAllocationAuthorized whenAllocationNotPaused nonReentrant {
         require(allocations.length <= 20, "Max 20 allocations per batch");
+        
+        // 逐个处理每个分配请求
         for (uint i = 0; i < allocations.length; i++) {
             _processAllocation(
                 allocations[i].user,
@@ -667,387 +451,140 @@ contract ServerNodeBackup is
     }
 
     /**
-     * @dev 从通用池分配（用于中节点、小节点、商品）
-     * @param user 用户地址
-     * @param stakeAddress 质押地址
-     * @param nodeType 节点类型
-     * @param totalAmount 总分配金额
-     * @notice 从剩余容量中分配，跳过已被分配为大节点的节点
-     */
-    function _allocateFromPool(
-        address user,
-        address stakeAddress,
-        uint8 nodeType,
-        uint256 totalAmount
-    ) internal {
-        require(
-            totalAmount > 0 && totalAmount <= DEFAULT_CAPACITY,
-            "Invalid amount"
-        );
-        uint256 allocated = 0;
-
-        // 遍历所有物理节点，从剩余容量中分配
-        for (
-            uint256 i = 0;
-            i < deployNode.length && allocated < totalAmount;
-            i++
-        ) {
-            uint256 nodeId = deployNode[i].id;
-
-            // 跳过已被整机大节点锁定的节点
-            if (isNodeAllocatedAsBig[nodeId]) {
-                continue;
-            }
-
-            uint256 available = nodeRemainingCapacity[nodeId];
-            if (available == 0) {
-                continue;
-            }
-
-            // 计算本次可从此节点分配的数量
-            uint256 toAllocate = totalAmount - allocated > available
-                ? available
-                : totalAmount - allocated;
-
-            // 扣减剩余容量
-            nodeRemainingCapacity[nodeId] -= toAllocate;
-            allocated += toAllocate;
-
-            // 记录分配详情
-            _recordAllocation(user, stakeAddress, nodeType, toAllocate, nodeId);
-
-            // 如果已分配完，提前退出
-            if (allocated >= totalAmount) {
-                break;
-            }
-        }
-
-        // 确保全部分配成功
-        require(allocated == totalAmount, "Insufficient capacity in node pool");
-    }
-
-    /**
-     * @dev 组合分配节点（中节点+小节点+商品，总金额不超过100万）
-     * @param user 用户地址
-     * @param stakeAddress 质押地址
-     * @param combination 组合信息（中节点数量、小节点数量、商品金额）
-     * @notice 总金额必须大于0且不超过100万（等于1个大节点的额度）
-     * @notice 重要：组合分配必须在同一个节点内完成，不能跨节点分配
-     */
-    function allocateCombinedNodes(
-        address user,
-        address stakeAddress,
-        NodeCombination calldata combination
-    ) external onlyAllocationAuthorized whenAllocationNotPaused {
-        require(user != address(0), "Invalid user");
-        require(stakeAddress != address(0), "Invalid stake address");
-        require(
-            user != stakeAddress,
-            "User and stake address cannot be the same"
-        );
-        require(
-            combination.mediumNodes > 0 ||
-                combination.smallNodes > 0 ||
-                combination.commodity > 0,
-            "At least one node or commodity required"
-        );
-
-        // 计算总金额：中节点*20万 + 小节点*5万 + 商品金额
-        uint256 totalAmount = uint256(combination.mediumNodes) *
-            200_000 +
-            uint256(combination.smallNodes) *
-            50_000 +
-            combination.commodity;
-
-        // 总金额必须在1到100万之间
-        require(
-            totalAmount > 0 && totalAmount <= 1_000_000,
-            "Total must be 1~1,000,000"
-        );
-
-        // 在单个节点内完成组合分配（不能跨节点）
-        _allocateCombinedFromSingleNode(
-            user,
-            stakeAddress,
-            combination,
-            totalAmount
-        );
-
-        // 更新用户的等效值（按比例计算）
-        uint256 equivalent = (totalAmount * SCALE) / DEFAULT_CAPACITY;
-        userPhysicalNodesEquivalent[user] += equivalent;
-        totalPhysicalNodesEquivalent += equivalent;
-
-        emit CombinedNodesAllocated(
-            user,
-            stakeAddress,
-            combination.mediumNodes,
-            combination.smallNodes,
-            combination.commodity,
-            totalAmount
-        );
-    }
-
-    /**
-     * @dev 从单个节点内完成组合分配（内部函数）
-     * @param user 用户地址
-     * @param stakeAddress 质押地址
-     * @param combination 组合信息
-     * @param totalAmount 总金额
-     * @notice 确保所有分配都在同一个节点内完成，符合"一个节点的分配不能超过1,000,000元"的需求
-     */
-    function _allocateCombinedFromSingleNode(
-        address user,
-        address stakeAddress,
-        NodeCombination calldata combination,
-        uint256 totalAmount
-    ) internal {
-        // 查找一个有足够剩余容量的节点（剩余容量≥总金额）
-        uint256 targetNodeId = 0;
-        bool found = false;
-
-        for (uint256 i = 0; i < deployNode.length; i++) {
-            uint256 nodeId = deployNode[i].id;
-
-            // 跳过已被分配为大节点的节点
-            if (isNodeAllocatedAsBig[nodeId]) {
-                continue;
-            }
-
-            uint256 available = nodeRemainingCapacity[nodeId];
-
-            // 找到剩余容量≥总金额的节点
-            if (available >= totalAmount) {
-                targetNodeId = nodeId;
-                found = true;
-                break;
-            }
-        }
-
-        // 必须找到一个有足够容量的节点
-        require(
-            found,
-            "No node has sufficient capacity for combined allocation"
-        );
-
-        // 在同一个节点内依次分配中节点、小节点、商品
-        uint256 remainingCapacity = nodeRemainingCapacity[targetNodeId];
-
-        // 分配中节点（每个20万）
-        if (combination.mediumNodes > 0) {
-            uint256 mediumAmount = uint256(combination.mediumNodes) * 200_000;
-            require(
-                remainingCapacity >= mediumAmount,
-                "Insufficient capacity for medium nodes"
-            );
-
-            for (uint8 i = 0; i < combination.mediumNodes; i++) {
-                _recordAllocation(user, stakeAddress, 2, 200_000, targetNodeId);
-            }
-            nodeRemainingCapacity[targetNodeId] -= mediumAmount;
-            remainingCapacity -= mediumAmount;
-        }
-
-        // 分配小节点（每个5万）
-        if (combination.smallNodes > 0) {
-            uint256 smallAmount = uint256(combination.smallNodes) * 50_000;
-            require(
-                remainingCapacity >= smallAmount,
-                "Insufficient capacity for small nodes"
-            );
-
-            for (uint8 i = 0; i < combination.smallNodes; i++) {
-                _recordAllocation(user, stakeAddress, 3, 50_000, targetNodeId);
-            }
-            nodeRemainingCapacity[targetNodeId] -= smallAmount;
-            remainingCapacity -= smallAmount;
-        }
-
-        // 分配商品（任意金额）
-        if (combination.commodity > 0) {
-            require(
-                remainingCapacity >= combination.commodity,
-                "Insufficient capacity for commodity"
-            );
-            _recordAllocation(
-                user,
-                stakeAddress,
-                4,
-                combination.commodity,
-                targetNodeId
-            );
-            nodeRemainingCapacity[targetNodeId] -= combination.commodity;
-        }
-    }
-
-    /**
-     * @dev 处理单次分配请求（内部函数）
-     * @param user 用户地址
-     * @param stakeAddress 质押地址
-     * @param nodeType 节点类型（1=大节点，2=中节点，3=小节点，4=商品）
-     * @param quantity 数量（用于大/中/小节点）
-     * @param amount 金额（用于商品）
+     * @dev 处理单个分配请求（内部函数）
+     * 功能：根据节点类型调用不同的分配函数
      */
     function _processAllocation(
         address user,
         address stakeAddress,
-        uint8 nodeType,
-        uint256 quantity,
-        uint256 amount
+        uint8 nodeType,      
+        uint256 quantity,    
+        uint256 amount        
     ) internal {
+        // 检查基本参数
         require(user != address(0), "Invalid user");
         require(stakeAddress != address(0), "Invalid stake address");
-        require(
-            user != stakeAddress,
-            "User and stake address cannot be the same"
-        );
+        require(user != stakeAddress, "User and stake address cannot be the same");
         require(nodeType >= 1 && nodeType <= 4, "Invalid node type");
 
-        uint256 allocatedCapacity;
-
         if (nodeType == 4) {
-            // 商品分配：金额必须在1到100万之间，数量必须为0
-            require(
-                amount >= 1 && amount <= 1_000_000,
-                "Amount must be 1-1,000,000"
-            );
+            // 商品分配：金额1-100万，数量必须为0
+            require(amount >= 1 && amount <= 1_000_000, "Amount must be 1-1,000,000");
             require(quantity == 0, "Quantity must be 0 for commodity");
-            _allocateCommodity(user, stakeAddress, amount);
-            allocatedCapacity = amount;
+            _allocateCommodity(user, stakeAddress, amount); // 分配商品
+            _updateEquivalentValue(user, amount); // 更新等效值
         } else {
-            // 大/中/小节点分配：数量必须大于0，金额必须为0
+            // 大/中/小节点：数量必须大于0，金额必须为0
             require(quantity > 0, "Quantity must be > 0");
             require(amount == 0, "Amount must be 0 for node types 1-3");
 
             if (nodeType == 1) {
-                // 大节点：整机独占
+                // 大节点：整机独占100万
                 _allocateBigNodes(user, stakeAddress, quantity);
-                return;
             } else if (nodeType == 2) {
                 // 中节点：每个20万
+                uint256 totalAmount = quantity * 200_000;
                 _allocateMediumNodes(user, stakeAddress, quantity);
-                allocatedCapacity = quantity * 200_000;
+                _updateEquivalentValue(user, totalAmount);
             } else if (nodeType == 3) {
                 // 小节点：每个5万
+                uint256 totalAmount = quantity * 50_000;
                 _allocateSmallNodes(user, stakeAddress, quantity);
-                allocatedCapacity = quantity * 50_000;
+                _updateEquivalentValue(user, totalAmount);
             }
-        }
-
-        // 更新等效值（大节点在_allocateBigNodes中已更新，这里跳过）
-        if (nodeType != 1) {
-            uint256 equivalent = (allocatedCapacity * SCALE) / DEFAULT_CAPACITY;
-            userPhysicalNodesEquivalent[user] += equivalent;
-            totalPhysicalNodesEquivalent += equivalent;
         }
     }
 
+    // ==================== 核心分配逻辑 ====================
+
     /**
-     * @dev 分配大节点（整机独占，每个100万）
+     * @dev 分配大节点（内部函数）
      * @param user 用户地址
      * @param stakeAddress 质押地址
-     * @param quantity 要分配的大节点数量
-     * @notice 只能分配typeParam=1且未被分配且剩余容量为100万的节点
+     * @param quantity 要分配几个大节点
+     * 条件：1.节点类型必须为1 2.节点未被分配过 3.节点剩余容量为100万
      */
     function _allocateBigNodes(
         address user,
         address stakeAddress,
         uint256 quantity
     ) internal {
-        uint256 allocated = 0;
+        uint256 allocated = 0; // 已分配的数量
         for (uint i = 0; i < deployNode.length && allocated < quantity; i++) {
             uint256 nodeId = deployNode[i].id;
-            // 检查：节点类型为1，未被分配为大节点，剩余容量为100万
+            
+            // 检查节点是否符合分配条件
             if (
-                deployNode[i].typeParam == 1 &&
-                !isNodeAllocatedAsBig[nodeId] &&
-                nodeRemainingCapacity[nodeId] == DEFAULT_CAPACITY
+                deployNode[i].typeParam == 1 && // 类型为1
+                !isNodeAllocatedAsBig[nodeId] && // 没被分配过大节点
+                nodeTotalAllocated[nodeId] == 0 // 没分配过任何金额
             ) {
-                uint256 capacity = deployNode[i].capacity;
-                // 标记节点已被分配为大节点，剩余容量设为0
+                // 标记为大节点，设置分配总额为100万
                 isNodeAllocatedAsBig[nodeId] = true;
-                nodeRemainingCapacity[nodeId] = 0;
-
+                nodeTotalAllocated[nodeId] = DEFAULT_CAPACITY;
+                
                 // 记录分配
-                _recordAllocation(user, stakeAddress, 1, capacity, nodeId);
-
+                _recordAllocation(user, stakeAddress, 1, DEFAULT_CAPACITY, nodeId);
+                
                 // 更新等效值
-                uint256 equivalent = (capacity * SCALE) / DEFAULT_CAPACITY;
-                userPhysicalNodesEquivalent[user] += equivalent;
-                totalPhysicalNodesEquivalent += equivalent;
-
-                allocated++;
+                _updateEquivalentValue(user, DEFAULT_CAPACITY);
+                
+                allocated++; // 已分配数量加1
             }
         }
-        require(
-            allocated == quantity,
-            "Insufficient available big nodes (type=1 and unallocated)"
-        );
+        require(allocated == quantity, "Insufficient available big nodes");
     }
 
     /**
-     * @dev 分配中节点（每个20万）
+     * @dev 分配中节点（内部函数）
      * @param user 用户地址
      * @param stakeAddress 质押地址
-     * @param quantity 要分配的中节点数量
-     * @notice 从剩余容量≥20万的节点中分配，一个节点可以分配多个中节点
+     * @param quantity 要分配几个中节点
+     * 条件：从剩余容量≥20万的节点中分配
      */
     function _allocateMediumNodes(
         address user,
         address stakeAddress,
         uint256 quantity
     ) internal {
-        uint256 remaining = quantity;
+        uint256 remaining = quantity; // 还需要分配的数量
         uint256 requiredCapacity = 200_000; // 每个中节点需要20万容量
 
+        // 遍历所有节点
         for (uint i = 0; i < deployNode.length && remaining > 0; i++) {
             uint256 nodeId = deployNode[i].id;
-
+            
             // 跳过已被分配为大节点的节点
-            if (isNodeAllocatedAsBig[nodeId]) {
-                continue;
-            }
+            if (isNodeAllocatedAsBig[nodeId]) continue;
 
-            uint256 available = nodeRemainingCapacity[nodeId];
+            // 计算节点剩余容量
+            uint256 allocated = nodeTotalAllocated[nodeId];
+            uint256 available = DEFAULT_CAPACITY - allocated;
 
             // 如果节点剩余容量≥20万，可以分配中节点
             if (available >= requiredCapacity) {
-                // 计算这个节点最多能分配多少个中节点
+                // 计算这个节点最多能分配几个中节点
                 uint256 maxFromThisNode = available / requiredCapacity;
                 // 实际分配数量 = min(还需要分配的数量, 这个节点能分配的最大数量)
-                uint256 allocateCount = remaining > maxFromThisNode
-                    ? maxFromThisNode
-                    : remaining;
-
-                // 扣减剩余容量
-                nodeRemainingCapacity[nodeId] -=
-                    allocateCount *
-                    requiredCapacity;
+                uint256 allocateCount = remaining > maxFromThisNode ? maxFromThisNode : remaining;
 
                 // 为每个中节点创建一条分配记录
                 for (uint j = 0; j < allocateCount; j++) {
-                    _recordAllocation(
-                        user,
-                        stakeAddress,
-                        2,
-                        requiredCapacity,
-                        nodeId
-                    );
+                    _recordAllocation(user, stakeAddress, 2, requiredCapacity, nodeId);
                 }
-
-                remaining -= allocateCount;
+                
+                remaining -= allocateCount; // 减少还需要分配的数量
             }
         }
-
         require(remaining == 0, "Insufficient capacity for medium nodes");
     }
 
     /**
-     * @dev 分配小节点（每个5万）
+     * @dev 分配小节点（内部函数）
      * @param user 用户地址
      * @param stakeAddress 质押地址
-     * @param quantity 要分配的小节点数量
-     * @notice 从剩余容量≥5万的节点中分配，一个节点可以分配多个小节点
+     * @param quantity 要分配几个小节点
+     * 条件：从剩余容量≥5万的节点中分配
      */
     function _allocateSmallNodes(
         address user,
@@ -1059,94 +596,175 @@ contract ServerNodeBackup is
 
         for (uint i = 0; i < deployNode.length && remaining > 0; i++) {
             uint256 nodeId = deployNode[i].id;
+            if (isNodeAllocatedAsBig[nodeId]) continue;
 
-            // 跳过已被分配为大节点的节点
-            if (isNodeAllocatedAsBig[nodeId]) {
-                continue;
-            }
+            uint256 allocated = nodeTotalAllocated[nodeId];
+            uint256 available = DEFAULT_CAPACITY - allocated;
 
-            uint256 available = nodeRemainingCapacity[nodeId];
-
-            // 如果节点剩余容量≥5万，可以分配小节点
             if (available >= requiredCapacity) {
-                // 计算这个节点最多能分配多少个小节点
                 uint256 maxFromThisNode = available / requiredCapacity;
-                // 实际分配数量 = min(还需要分配的数量, 这个节点能分配的最大数量)
-                uint256 allocateCount = remaining > maxFromThisNode
-                    ? maxFromThisNode
-                    : remaining;
+                uint256 allocateCount = remaining > maxFromThisNode ? maxFromThisNode : remaining;
 
-                // 扣减剩余容量
-                nodeRemainingCapacity[nodeId] -=
-                    allocateCount *
-                    requiredCapacity;
-
-                // 为每个小节点创建一条分配记录
                 for (uint j = 0; j < allocateCount; j++) {
-                    _recordAllocation(
-                        user,
-                        stakeAddress,
-                        3,
-                        requiredCapacity,
-                        nodeId
-                    );
+                    _recordAllocation(user, stakeAddress, 3, requiredCapacity, nodeId);
                 }
-
+                
                 remaining -= allocateCount;
             }
         }
-
         require(remaining == 0, "Insufficient capacity for small nodes");
     }
 
     /**
-     * @dev 分配商品（任意金额，1-100万之间）
+     * @dev 分配商品（内部函数）
      * @param user 用户地址
      * @param stakeAddress 质押地址
-     * @param amount 商品金额
-     * @notice 从剩余容量中按需分配，可以跨多个节点分配
+     * @param amount 商品金额（1-100万）
+     * 条件：从剩余容量≥投资金额的节点中分配，可以跨多个节点
      */
     function _allocateCommodity(
         address user,
         address stakeAddress,
         uint256 amount
     ) internal {
-        uint256 remaining = amount;
+        uint256 remaining = amount; // 还需要分配的金额
 
         for (uint i = 0; i < deployNode.length && remaining > 0; i++) {
             uint256 nodeId = deployNode[i].id;
+            if (isNodeAllocatedAsBig[nodeId]) continue;
 
-            // 跳过已被分配为大节点的节点
-            if (isNodeAllocatedAsBig[nodeId]) {
-                continue;
-            }
+            uint256 allocated = nodeTotalAllocated[nodeId];
+            uint256 available = DEFAULT_CAPACITY - allocated;
 
-            uint256 available = nodeRemainingCapacity[nodeId];
+            if (available == 0) continue; // 节点已满，跳过
 
-            // 如果节点剩余容量≥还需要分配的金额，一次性分配完
-            if (available >= remaining) {
-                nodeRemainingCapacity[nodeId] -= remaining;
-                _recordAllocation(user, stakeAddress, 4, remaining, nodeId);
-                remaining = 0;
-            } else if (available > 0) {
-                // 如果节点剩余容量<还需要分配的金额，分配完这个节点的所有剩余容量
-                nodeRemainingCapacity[nodeId] -= available;
-                _recordAllocation(user, stakeAddress, 4, available, nodeId);
-                remaining -= available;
-            }
+            // 这次从这个节点分配多少
+            uint256 toAllocate = remaining > available ? available : remaining;
+            
+            // 记录分配
+            _recordAllocation(user, stakeAddress, 4, toAllocate, nodeId);
+            
+            remaining -= toAllocate; // 减少还需要分配的金额
         }
-
         require(remaining == 0, "Insufficient capacity for commodity");
     }
 
+    // ==================== 组合分配 ====================
+
     /**
-     * @dev 记录分配日志（内部函数）
+     * @dev 组合分配节点（外部调用）
+     * @param user 用户地址
+     * @param stakeAddress 质押地址
+     * @param combination 组合信息（中节点+小节点+商品）
+     * 功能：中节点+小节点+商品混合分配，总金额不超过100万
+     * 关键：必须在同一个节点内完成所有分配
+     */
+    function allocateCombinedNodes(
+        address user,
+        address stakeAddress,
+        NodeCombination calldata combination
+    ) external onlyAllocationAuthorized whenAllocationNotPaused {
+        // 检查参数
+        require(user != address(0) && stakeAddress != address(0), "Invalid addresses");
+        require(user != stakeAddress, "User and stake address cannot be the same");
+        require(
+            combination.mediumNodes > 0 || combination.smallNodes > 0 || combination.commodity > 0,
+            "At least one node or commodity required"
+        );
+
+        // 计算总金额：中节点×20万 + 小节点×5万 + 商品金额
+        uint256 totalAmount = uint256(combination.mediumNodes) * 200_000 +
+                             uint256(combination.smallNodes) * 50_000 +
+                             combination.commodity;
+
+        // 总金额必须在1到100万之间
+        require(totalAmount > 0 && totalAmount <= 1_000_000, "Total must be 1~1,000,000");
+
+        // 在单个节点内完成所有分配
+        _allocateCombinedFromSingleNode(user, stakeAddress, combination, totalAmount);
+        
+        // 更新等效值
+        _updateEquivalentValue(user, totalAmount);
+
+        // 触发事件
+        emit CombinedNodesAllocated(
+            user,
+            stakeAddress,
+            combination.mediumNodes,
+            combination.smallNodes,
+            combination.commodity,
+            totalAmount
+        );
+    }
+
+    /**
+     * @dev 在单个节点内完成组合分配（内部函数）
+     * @param user 用户地址
+     * @param stakeAddress 质押地址
+     * @param combination 组合信息
+     * @param totalAmount 总金额
+     * 核心：确保一个节点的所有分配加起来不超过100万
+     */
+    function _allocateCombinedFromSingleNode(
+        address user,
+        address stakeAddress,
+        NodeCombination calldata combination,
+        uint256 totalAmount
+    ) internal {
+        uint256 targetNodeId = 0; // 目标节点ID
+        bool found = false; // 是否找到合适节点
+
+        // 1. 寻找有足够容量的节点
+        for (uint256 i = 0; i < deployNode.length; i++) {
+            uint256 nodeId = deployNode[i].id;
+            if (isNodeAllocatedAsBig[nodeId]) continue; // 跳过已分配为大节点的
+
+            // 计算节点剩余容量
+            uint256 allocated = nodeTotalAllocated[nodeId];
+            uint256 remaining = DEFAULT_CAPACITY - allocated;
+
+            // 找到剩余容量≥总金额的节点
+            if (remaining >= totalAmount) {
+                targetNodeId = nodeId;
+                found = true;
+                break;
+            }
+        }
+
+        // 必须找到有足够容量的节点
+        require(found, "No node has sufficient capacity for combined allocation");
+
+        // 2. 在找到的节点内依次分配
+        // 分配中节点（每个20万）
+        if (combination.mediumNodes > 0) {
+            for (uint8 i = 0; i < combination.mediumNodes; i++) {
+                _recordAllocation(user, stakeAddress, 2, 200_000, targetNodeId);
+            }
+        }
+
+        // 分配小节点（每个5万）
+        if (combination.smallNodes > 0) {
+            for (uint8 i = 0; i < combination.smallNodes; i++) {
+                _recordAllocation(user, stakeAddress, 3, 50_000, targetNodeId);
+            }
+        }
+
+        // 分配商品（任意金额）
+        if (combination.commodity > 0) {
+            _recordAllocation(user, stakeAddress, 4, combination.commodity, targetNodeId);
+        }
+    }
+
+    // ==================== 核心记录功能 ====================
+
+    /**
+     * @dev 记录分配详情（内部函数）
      * @param user 用户地址
      * @param stakeAddress 质押地址
      * @param nodeType 节点类型
      * @param amount 分配金额
      * @param nodeId 节点ID
-     * @notice 同时记录到用户分配记录和节点分配记录中
+     * 功能：1.检查是否超过100万限制 2.更新累计分配 3.保存记录
      */
     function _recordAllocation(
         address user,
@@ -1155,6 +773,14 @@ contract ServerNodeBackup is
         uint256 amount,
         uint256 nodeId
     ) internal {
+        // 关键检查：确保一个节点的所有分配加起来不超过100万
+        uint256 newTotal = nodeTotalAllocated[nodeId] + amount;
+        require(newTotal <= DEFAULT_CAPACITY, "Node total allocation exceeds 1,000,000 limit");
+        
+        // 更新节点累计分配金额
+        nodeTotalAllocated[nodeId] = newTotal;
+
+        // 创建分配记录
         AllocationRecord memory record = AllocationRecord({
             timestamp: block.timestamp,
             user: user,
@@ -1164,45 +790,151 @@ contract ServerNodeBackup is
             nodeId: nodeId
         });
 
-        // 保存到用户的分配记录
+        // 保存到两个地方：1.按用户索引 2.按节点索引
         userAllocationRecords[user].push(record);
-        // 保存到节点的分配记录
         nodeAllocationRecords[nodeId].push(record);
 
+        // 触发分配事件
         emit NodeAllocated(user, stakeAddress, nodeType, amount, nodeId);
     }
 
-    // ==================== 白名单、暂停、查询、奖励等 ====================
     /**
-     * @dev 设置白名单
+     * @dev 更新等效值（内部函数）
      * @param user 用户地址
-     * @param _isTrue true=添加，false=移除
-     * @notice 白名单最多3个，只有管理员可以调用
+     * @param amount 分配金额
+     * 功能：计算等效值并更新用户和总体的统计
      */
-    function setWhiteList(address user, bool _isTrue) external onlyOwner {
-        require(user != address(0), "Invalid user address");
-        if (_isTrue) {
-            // 添加白名单
-            require(
-                currentWhitelistCount < MAX_WHITELIST,
-                "Max whitelist limit reached"
-            );
-            require(!whiteList[user], "User already whitelisted");
-            whiteList[user] = true;
-            currentWhitelistCount++;
-        } else {
-            // 移除白名单
-            if (whiteList[user]) {
-                whiteList[user] = false;
-                currentWhitelistCount--;
-            }
+    function _updateEquivalentValue(address user, uint256 amount) internal {
+        // 等效值 = (分配金额 × 精度) / 100万
+        uint256 equivalent = (amount * SCALE) / DEFAULT_CAPACITY;
+        userPhysicalNodesEquivalent[user] += equivalent;
+        totalPhysicalNodesEquivalent += equivalent;
+    }
+
+    // ==================== 查询功能 ====================
+
+    /**
+     * @dev 查询节点详细信息
+     * @param nodeId 节点ID
+     * @return 节点信息
+     * 优化：使用映射直接查找，速度更快
+     */
+    function getNodeInfo(uint256 nodeId) external view returns (NodeInfo memory) {
+        // 通过映射直接找到节点在数组中的位置
+        uint256 index = nodeIndexById[nodeId];
+        require(index < deployNode.length, "Node not found");
+        require(deployNode[index].id == nodeId, "Node index mismatch");
+        return deployNode[index];
+    }
+
+    /**
+     * @dev 查询节点剩余容量
+     * @param nodeId 节点ID
+     * @return 剩余容量
+     * 计算：剩余容量 = 100万 - 已分配金额
+     */
+    function getNodeRemainingCapacity(uint256 nodeId) public view returns (uint256) {
+        require(nodeIndexById[nodeId] < deployNode.length, "Node does not exist");
+        if (isNodeAllocatedAsBig[nodeId]) return 0; // 大节点已被完全分配
+        return DEFAULT_CAPACITY - nodeTotalAllocated[nodeId];
+    }
+
+    /**
+     * @dev 查询节点已分配总额
+     * @param nodeId 节点ID
+     * @return 已分配金额
+     */
+    function getNodeTotalAllocated(uint256 nodeId) public view returns (uint256) {
+        require(nodeIndexById[nodeId] < deployNode.length, "Node does not exist");
+        return nodeTotalAllocated[nodeId];
+    }
+
+    /**
+     * @dev 检查是否可以分配指定金额到节点
+     * @param nodeId 节点ID
+     * @param amount 要分配的金额
+     * @return 是否可以分配
+     */
+    function canAllocateToNode(uint256 nodeId, uint256 amount) public view returns (bool) {
+        if (!nodeExists(nodeId)) return false;
+        if (isNodeAllocatedAsBig[nodeId]) return false; // 大节点不能分配
+        return (nodeTotalAllocated[nodeId] + amount) <= DEFAULT_CAPACITY;
+    }
+
+    /**
+     * @dev 检查节点是否存在
+     * @param nodeId 节点ID
+     * @return 是否存在
+     */
+    function nodeExists(uint256 nodeId) public view returns (bool) {
+        if (nodeId == 0) return false;
+        uint256 index = nodeIndexById[nodeId];
+        if (index >= deployNode.length) return false;
+        return deployNode[index].id == nodeId;
+    }
+
+    /**
+     * @dev 按用户查询分配记录
+     * @param user 用户地址
+     * @return 该用户的所有分配记录
+     */
+    function getUserAllocations(address user) external view returns (AllocationRecord[] memory) {
+        return userAllocationRecords[user];
+    }
+
+    /**
+     * @dev 按节点ID查询分配记录
+     * @param nodeId 节点ID
+     * @return 该节点的所有分配记录
+     */
+    function getNodeAllocations(uint256 nodeId) external view returns (AllocationRecord[] memory) {
+        return nodeAllocationRecords[nodeId];
+    }
+
+    /**
+     * @dev 获取节点统计信息
+     * @notice 返回值totalNodes即总节点数、activeNodes即激活节点数、bigNodes即大节点数、totalRemainingCapacity即总剩余容量
+     */
+    function getNodeStatistics() external view returns (
+        uint256 totalNodes,
+        uint256 activeNodes,
+        uint256 bigNodes,
+        uint256 totalRemainingCapacity
+    ) {
+        totalNodes = deployNode.length;
+        
+        // 遍历所有节点计算统计
+        for (uint i = 0; i < deployNode.length; i++) {
+            NodeInfo storage node = deployNode[i];
+            if (node.isActive) activeNodes++;
+            if (isNodeAllocatedAsBig[node.id]) bigNodes++;
+            else totalRemainingCapacity += getNodeRemainingCapacity(node.id);
         }
-        emit WhitelistUpdated(user, _isTrue);
+        
+        return (totalNodes, activeNodes, bigNodes, totalRemainingCapacity);
+    }
+
+    // ==================== 停止节点分配奖励功能 ====================
+
+    /**
+     * @dev 暂停节点分配奖励（只有管理员能调用）
+     * 功能：暂停后无法通过configRewards分发奖励
+     */
+    function pauseNodeAllocationReward() external onlyOwner {
+        pausedNodeAllocationReward = true;
+        emit NodeAllocationRewardPaused(msg.sender);
+    }
+
+    /**
+     * @dev 恢复节点分配奖励（只有管理员能调用）
+     */
+    function unpauseNodeAllocationReward() external onlyOwner {
+        pausedNodeAllocationReward = false;
+        emit NodeAllocationRewardUnpaused(msg.sender);
     }
 
     /**
      * @dev 暂停节点分配
-     * @notice 只有管理员可以调用
      */
     function pauseNodeAllocation() external onlyOwner {
         pausedNodeAllocation = true;
@@ -1211,70 +943,310 @@ contract ServerNodeBackup is
 
     /**
      * @dev 恢复节点分配
-     * @notice 只有管理员可以调用
      */
     function unpauseNodeAllocation() external onlyOwner {
         pausedNodeAllocation = false;
         emit AllocationUnpaused(msg.sender);
     }
 
+    // ==================== 奖励分发功能 ====================
+
     /**
-     * @dev 暂停节点分配奖励
-     * @notice 只有管理员可以调用，暂停后无法通过configRewards分发奖励
+     * @dev 分发奖励给用户（只有管理员能调用）
+     * @param _users 用户地址数组（最多50个）
+     * @param _stakeAddresses 质押地址数组
+     * 规则：1.每人每天只能领一次 2.奖励按等效值比例分配 3.50%给用户，50%给质押地址
      */
-    function pauseNodeAllocationReward() external onlyOwner {
-        pausedNodeAllocationReward = true;
-        emit NodeAllocationRewardPaused(msg.sender);
+    function configRewards(
+        address[] calldata _users,
+        address[] calldata _stakeAddresses
+    ) external onlyOwner nonReentrant whenNotPaused whenNodeAllocationRewardNotPaused {
+        require(_users.length == _stakeAddresses.length, "Arrays length mismatch");
+        require(_users.length > 0 && _users.length <= 50, "Invalid users count");
+
+        // 获取当前奖励信息（从奖励计算器获取）
+        (uint256 dailyReward, uint16 currentYear, uint256 currentDay) = getCurrentRewardInfo();
+        require(dailyReward > 0, "Daily reward is zero");
+
+        // 计算有效总量（最少按500个节点算）
+        uint256 effectiveTotal = totalPhysicalNodesEquivalent < (BASENODE * SCALE)
+            ? (BASENODE * SCALE)
+            : totalPhysicalNodesEquivalent;
+        require(effectiveTotal > 0, "No physical nodes sold yet");
+
+        // 1. 计算每个用户应得的奖励
+        uint256 totalRewardNeeded = 0;
+        uint256[] memory userRewards = new uint256[](_users.length);
+
+        for (uint256 i = 0; i < _users.length; i++) {
+            address user = _users[i];
+            
+            // 检查今天是否已领取
+            if (lastRewardDay[user][currentYear] >= currentDay) continue;
+
+            uint256 userEquivalent = userPhysicalNodesEquivalent[user];
+            if (userEquivalent == 0) continue;
+
+            // 计算用户应得的每日奖励
+            uint256 totalDailyReward = (dailyReward * userEquivalent) / effectiveTotal;
+            if (totalDailyReward == 0) continue;
+
+            userRewards[i] = totalDailyReward;
+            totalRewardNeeded += totalDailyReward;
+        }
+
+        // 2. 检查合约余额是否足够
+        require(address(this).balance >= totalRewardNeeded, "Insufficient contract balance");
+
+        // 3. 实际分发奖励
+        uint256 totalDistributed = 0;
+        uint256 usersProcessed = 0;
+
+        for (uint256 i = 0; i < _users.length; i++) {
+            if (userRewards[i] == 0) continue;
+
+            address user = _users[i];
+            address stakeAddress = _stakeAddresses[i];
+
+            // 更新领取记录（标记今天已领取）
+            lastRewardDay[user][currentYear] = currentDay;
+
+            // 计算分配金额：50%给用户，50%给质押地址
+            uint256 userReward = userRewards[i] / 2;
+            uint256 stakeReward = userRewards[i] - userReward;
+
+            // 转账
+            TransferHelper.safeTransferETH(user, userReward);
+            TransferHelper.safeTransferETH(stakeAddress, stakeReward);
+
+            totalDistributed += userRewards[i];
+            usersProcessed++;
+
+            // 触发奖励分发事件
+            emit RewardDistributed(user, userReward, stakeAddress, stakeReward, currentYear);
+        }
+
+        // 触发批量奖励分发事件
+        emit BatchRewardsDistributed(usersProcessed, totalDistributed, currentYear);
     }
 
     /**
-     * @dev 恢复节点分配奖励
-     * @notice 只有管理员可以调用
+     * @dev 获取当前奖励信息
+     * @return dailyReward 每日奖励金额
+     * @return currentYear 当前年份
+     * @return currentDay 当前天数
      */
-    function unpauseNodeAllocationReward() external onlyOwner {
-        pausedNodeAllocationReward = false;
-        emit NodeAllocationRewardUnpaused(msg.sender);
+    function getCurrentRewardInfo() public returns (uint256 dailyReward, uint16 currentYear, uint256 currentDay) {
+        // 调用奖励计算器获取数据
+        (bool success, bytes memory data) = REWARD.call(abi.encodeWithSignature("getCurrentDailyReward()"));
+        require(success, "Failed to get current daily reward");
+        
+        (dailyReward, currentDay) = abi.decode(data, (uint256, uint256));
+        
+        // 计算当前年份（假设每年365天，最多30年）
+        currentYear = uint16(((currentDay - 1) / 365) + 1);
+        if (currentYear > 30) currentYear = 30;
+        
+        return (dailyReward, currentYear, currentDay);
     }
 
     /**
-     * @dev 查询用户的所有分配记录
+     * @dev 暂停所有奖励分发
+     */
+    function pauseRewards() external onlyOwner {
+        _pause();
+        emit RewardPaused(msg.sender);
+    }
+
+    /**
+     * @dev 恢复所有奖励分发
+     */
+    function unpauseRewards() external onlyOwner {
+        _unpause();
+        emit RewardUnpaused(msg.sender);
+    }
+
+    // ==================== 其他功能 ====================
+
+    /**
+     * @dev 存入BKC到合约（只有管理员能调用）
+     * 功能：给合约充值，用于后续发奖励
+     */
+    function depositBKC() external payable onlyOwner nonReentrant {
+        require(msg.value > 0, "Amount must be greater than 0");
+    }
+
+    /**
+     * @dev 查询合约余额
+     * @return 合约当前的ETH余额
+     */
+    function getContractBalance() public view returns (uint256) {
+        return address(this).balance;
+    }
+
+    // ==================== 多签提款功能 ====================
+
+    /**
+     * @dev 创建提款申请（只有多签签名人能调用）
+     * @param _recipient 收款人地址
+     * @param _amount 提款金额
+     * @return proposalId 申请ID
+     */
+    function proposeWithdrawal(
+        address payable _recipient,
+        uint256 _amount
+    ) external onlyWithdrawMultiSig returns (uint256 proposalId) {
+        require(_recipient != address(0), "Invalid recipient address");
+        require(_amount > 0, "Amount must be > 0");
+        require(address(this).balance >= _amount, "Insufficient contract balance");
+
+        // 创建新申请
+        proposalId = withdrawalProposals.length;
+        withdrawalProposals.push(
+            WithdrawalProposal({
+                proposer: msg.sender,
+                recipient: _recipient,
+                amount: _amount,
+                confirmations: 0,
+                executed: false,
+                createdAt: block.timestamp
+            })
+        );
+        
+        emit WithdrawalProposalSubmitted(proposalId, msg.sender, _recipient, _amount);
+        return proposalId;
+    }
+
+    /**
+     * @dev 确认提款申请（只有多签签名人能调用）
+     * @param proposalId 申请ID
+     */
+    function confirmWithdrawal(
+        uint256 proposalId
+    ) external onlyWithdrawMultiSig withdrawalProposalExists(proposalId) notWithdrawConfirmed(proposalId) {
+        // 更新确认状态
+        WithdrawalProposal storage proposal = withdrawalProposals[proposalId];
+        proposal.confirmations += 1;
+        withdrawalConfirmations[proposalId][msg.sender] = true;
+        
+        emit WithdrawalProposalConfirmed(proposalId, msg.sender);
+    }
+
+    /**
+     * @dev 执行提款申请（需要达到阈值）
+     * @param proposalId 申请ID
+     */
+    function executeWithdrawal(
+        uint256 proposalId
+    ) external withdrawalProposalExists(proposalId) nonReentrant {
+        WithdrawalProposal storage proposal = withdrawalProposals[proposalId];
+        
+        // 检查是否达到确认阈值
+        require(proposal.confirmations >= withdrawThreshold, "Not enough confirmations");
+        require(!proposal.executed, "Already executed");
+        
+        // 标记为已执行并转账
+        proposal.executed = true;
+        TransferHelper.safeTransferETH(proposal.recipient, proposal.amount);
+        
+        emit WithdrawalProposalExecuted(proposalId, msg.sender, proposal.recipient, proposal.amount);
+    }
+
+    /**
+     * @dev 添加多签签名人
+     * @param _signer 要添加的签名人地址
+     */
+    function addWithdrawSigner(address _signer) external onlyWithdrawMultiSig {
+        require(_signer != address(0), "Invalid address");
+        require(!isWithdrawSigner[_signer], "Already a signer");
+        withdrawSigners.push(_signer);
+        isWithdrawSigner[_signer] = true;
+        emit WithdrawSignerAdded(_signer);
+    }
+
+    /**
+     * @dev 移除多签签名人
+     * @param _signer 要移除的签名人地址
+     */
+    function removeWithdrawSigner(address _signer) external onlyWithdrawMultiSig {
+        require(isWithdrawSigner[_signer], "Not a signer");
+        require(withdrawSigners.length > withdrawThreshold, "Cannot remove below threshold");
+        
+        // 从数组中移除
+        for (uint i = 0; i < withdrawSigners.length; i++) {
+            if (withdrawSigners[i] == _signer) {
+                withdrawSigners[i] = withdrawSigners[withdrawSigners.length - 1];
+                withdrawSigners.pop();
+                break;
+            }
+        }
+        
+        delete isWithdrawSigner[_signer];
+        emit WithdrawSignerRemoved(_signer);
+    }
+
+    /**
+     * @dev 更新提款阈值
+     * @param _threshold 新的阈值
+     */
+    function updateWithdrawThreshold(uint256 _threshold) external onlyWithdrawMultiSig {
+        require(_threshold > 0, "Threshold must be > 0");
+        require(_threshold <= withdrawSigners.length, "Threshold exceeds signers count");
+        withdrawThreshold = _threshold;
+        emit WithdrawThresholdUpdated(_threshold);
+    }
+
+    /**
+     * @dev 查询多签信息
+     * @return 签名人列表和阈值
+     */
+    function getWithdrawMultiSigInfo() external view returns (address[] memory, uint256) {
+        return (withdrawSigners, withdrawThreshold);
+    }
+
+    /**
+     * @dev 查询提款申请信息
+     * @param proposalId 申请ID
+     */
+    function getWithdrawalProposal(
+        uint256 proposalId
+    ) external view returns (
+        address proposer,
+        address payable recipient,
+        uint256 amount,
+        uint256 confirmations,
+        bool executed,
+        uint256 createdAt
+    ) {
+        require(proposalId < withdrawalProposals.length, "Withdrawal proposal does not exist");
+        WithdrawalProposal storage p = withdrawalProposals[proposalId];
+        return (p.proposer, p.recipient, p.amount, p.confirmations, p.executed, p.createdAt);
+    }
+
+    /**
+     * @dev 查询提款申请数量
+     * @return 申请总数
+     */
+    function getWithdrawalProposalCount() external view returns (uint256) {
+        return withdrawalProposals.length;
+    }
+
+    /**
+     * @dev 查询用户奖励状态
      * @param user 用户地址
-     * @return 分配记录数组
+     * @param year 年份
+     * @return 是否已领取过，最后领取日期
      */
-    function getUserAllocations(
-        address user
-    ) external view returns (AllocationRecord[] memory) {
-        return userAllocationRecords[user];
+    function getUserRewardStatus(address user, uint16 year) external view returns (bool, uint256) {
+        return (lastRewardDay[user][year] > 0, lastRewardDay[user][year]);
     }
 
     /**
-     * @dev 查询节点的所有分配记录
-     * @param nodeId 节点ID
-     * @return 分配记录数组
+     * @dev 查询奖励是否暂停
+     * @return 是否暂停
      */
-    function getNodeAllocations(
-        uint256 nodeId
-    ) external view returns (AllocationRecord[] memory) {
-        return nodeAllocationRecords[nodeId];
-    }
-
-    /**
-     * @dev 查询节点剩余容量
-     * @param nodeId 节点ID
-     * @return 剩余容量
-     */
-    function getNodeRemainingCapacity(
-        uint256 nodeId
-    ) external view returns (uint256) {
-        return nodeRemainingCapacity[nodeId];
-    }
-
-    /**
-     * @dev 查询当前白名单数量
-     * @return 白名单数量
-     */
-    function getWhitelistCount() external view returns (uint256) {
-        return currentWhitelistCount;
+    function isPaused() external view returns (bool) {
+        return paused();
     }
 
     /**
@@ -1294,186 +1266,17 @@ contract ServerNodeBackup is
     }
 
     /**
-     * @dev 存入代币到合约
-     * @param amount 存入金额
-     * @notice 只有管理员可以调用，需要先授权
+     * @dev 查询当前白名单数量
+     * @return 白名单人数
      */
-    function depositToken(uint256 amount) external onlyOwner nonReentrant {
-        require(amount > 0, "Amount must be greater than 0");
-        require(
-            IERC20(BKC).allowance(msg.sender, address(this)) >= amount,
-            "BKC allowance not sufficient"
-        );
-        TransferHelper.safeTransferFrom(BKC, msg.sender, address(this), amount);
+    function getWhitelistCount() external view returns (uint256) {
+        return currentWhitelistCount;
     }
 
-    /**
-     * @dev 查询合约代币余额
-     * @return 代币余额
-     */
-    function getTokenBalance() external view returns (uint256) {
-        return IERC20(BKC).balanceOf(address(this));
-    }
+    receive() external payable {}
 
-    /**
-     * @dev 查询年度奖励（内部函数）
-     * @param _year 年份
-     * @return 年度奖励金额
-     */
-    function getDailyRewards(uint16 _year) internal view returns (uint256) {
-        (bool success, bytes memory data) = REWARD.staticcall(
-            abi.encodeWithSignature("getYearlyRewardInfo(uint256)", _year)
-        );
-        require(success && data.length >= 64, "Query reward failed");
-        (uint256 amount, ) = abi.decode(data, (uint256, bool));
-        return amount;
-    }
-
-    /**
-     * @dev 配置并分发奖励
-     * @param _users 用户地址数组（最多50个）
-     * @param _year 年份（1-30）
-     * @notice 只有管理员可以调用，奖励未暂停且节点分配奖励未暂停时才能调用
-     * @notice 50%奖励转给质押地址，剩余50%按比例分给用户
-     */
-    function configRewards(
-        address[] calldata _users,
-        address[] calldata _stakeAddresses,
-        uint16 _year
-    )
-        external
-        onlyOwner
-        nonReentrant
-        whenNotPaused
-        whenNodeAllocationRewardNotPaused
-    {
-        require(
-            _users.length > 0 && _stakeAddresses.length > 0,
-            "Users array cannot be empty"
-        );
-        require(
-            _users.length <= 50 && _stakeAddresses.length <= 50,
-            "Too many users, maximum 50 per batch"
-        );
-        require(_year >= 1 && _year <= 30, "Invalid year");
-
-        // 获取年度每日奖励
-        uint256 yearlyReward = getDailyRewards(_year);
-        require(yearlyReward > 0, "Reward is zero");
-
-        // 50%给质押地址
-        uint256 stakeRewardAddrAmount = (yearlyReward * 50) / 100;
-        yearlyReward -= stakeRewardAddrAmount;
-
-        // 计算有效总量（如果总等效值小于基础节点，使用基础节点）
-        uint256 effectiveTotal = totalPhysicalNodesEquivalent <
-            (BASENODE * SCALE)
-            ? (BASENODE * SCALE)
-            : totalPhysicalNodesEquivalent;
-        require(effectiveTotal > 0, "No physical nodes sold yet");
-
-        uint256 currentDay = block.timestamp / SECONDS_PER_DAY;
-        uint256 totalDistributed = 0;
-        uint256 usersProcessed = 0;
-
-        // 遍历用户，按比例分发奖励
-        for (
-            uint256 i = 0;
-            i < _users.length && i < _stakeAddresses.length;
-            i++
-        ) {
-            address user = _users[i];
-            address stakeAddress = _stakeAddresses[i];
-            require(user != address(0) && stakeAddress != address(0) && user != stakeAddress, "Invalid user or stake address");
-
-            uint256 userEquivalent = userPhysicalNodesEquivalent[user];
-            if (userEquivalent == 0) continue; // 用户没有节点，跳过
-            if (lastRewardDay[user][_year] >= currentDay) continue; // 今天已领取，跳过
-
-            // 按比例计算奖励
-            uint256 rewardAmount = (yearlyReward * userEquivalent) /
-                effectiveTotal;
-            if (rewardAmount == 0) continue; // 奖励为0，跳过
-
-            // 检查合约余额
-            uint256 contractBalance = IERC20(BKC).balanceOf(address(this));
-            require(
-                contractBalance >= rewardAmount,
-                "Insufficient contract balance"
-            );
-
-            // 转账给购买节点的用户奖励
-            TransferHelper.safeTransfer(BKC, user, rewardAmount);
-            // 转账给质押节点地址奖励
-            TransferHelper.safeTransfer(BKC, stakeAddress, stakeRewardAddrAmount);
-            lastRewardDay[user][_year] = currentDay; // 记录领取日期
-    
-            totalDistributed += rewardAmount;
-            totalDistributed += stakeRewardAddrAmount;
-            usersProcessed++;
-            emit RewardDistributed(user, rewardAmount, stakeAddress, stakeRewardAddrAmount, _year);
-        }
-
-        emit BatchRewardsDistributed(usersProcessed, totalDistributed, _year);
-    }
-
-    /**
-     * @dev 暂停奖励分发
-     * @notice 只有管理员可以调用
-     */
-    function pauseRewards() external onlyOwner {
-        _pause();
-        emit RewardPaused(msg.sender);
-    }
-
-    /**
-     * @dev 恢复奖励分发
-     * @notice 只有管理员可以调用
-     */
-    function unpauseRewards() external onlyOwner {
-        _unpause();
-        emit RewardUnpaused(msg.sender);
-    }
-
-    /**
-     * @dev 查询奖励是否暂停
-     * @return 是否暂停
-     */
-    function isPaused() external view returns (bool) {
-        return paused();
-    }
-
-    // ==================== 查询函数 ====================
-    /**
-     * @dev 查询多签信息
-     * @return 签名人列表和阈值
-     */
-    function getWithdrawMultiSigInfo()
-        external
-        view
-        returns (address[] memory, uint256)
-    {
-        return (withdrawSigners, withdrawThreshold);
-    }
-
-    /**
-     * @dev 查询提款提案数量
-     * @return 提案数量
-     */
-    function getWithdrawalProposalCount() external view returns (uint256) {
-        return withdrawalProposals.length;
-    }
-
-    /**
-     * @dev 查询用户奖励状态
-     * @param user 用户地址
-     * @param year 年份
-     * @return 是否已领取过，最后领取日期
-     */
-    function getUserRewardStatus(
-        address user,
-        uint16 year
-    ) external view returns (bool, uint256) {
-        return (lastRewardDay[user][year] > 0, lastRewardDay[user][year]);
+    // 取回BKC的紧急取款函数（只有管理员能调用）
+    function emergencyWithdraw() external onlyOwner nonReentrant {     
+        TransferHelper.safeTransferETH(msg.sender, address(this).balance);
     }
 }

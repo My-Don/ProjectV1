@@ -135,6 +135,7 @@ contract ServerNodeV2Backup is
     mapping(uint256 => AllocationRecord[]) public nodeAllocationRecords; // 每个节点的分配记录
     
     mapping(bytes32 => bool) private _usedIPs; // 用过的IP地址，确保IP唯一
+    mapping(bytes32 => uint256) public nodeIdByIP; // 通过IP查节点ID
 
     // ====== 控制开关 ======
     bool public pausedNodeAllocation; // 节点分配是否暂停
@@ -261,9 +262,6 @@ contract ServerNodeV2Backup is
         uint256 expectedAmount,
         bool verified
     );
-
-
-    mapping(bytes32 => uint256) public nodeIdByIP; // 通过IP查节点ID
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {

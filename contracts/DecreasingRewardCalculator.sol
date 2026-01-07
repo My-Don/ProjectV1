@@ -5,8 +5,9 @@ contract DecreasingRewardCalculator {
     // 合约部署时间戳（秒）
     uint256 public immutable deploymentTimestamp;
 
-    // 初始每日奖励基数 (BKC)
-    uint256 public constant INITIAL_DAILY_REWARD = 150000; 
+    // 初始每日奖励基数 (ETH)
+    // uint256 public constant INITIAL_DAILY_REWARD = 150000; 
+    uint256 public constant INITIAL_DAILY_REWARD = 1 ether;
 
     // 递减率 (10%)
     uint256 public constant DECREASE_RATE = 10; // 百分比

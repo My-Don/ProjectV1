@@ -11,7 +11,7 @@ async function main() {
 
   // 部署参数
   const initialOwner = "0x5159eA8501d3746bB07c20B5D0406bD12844D7ec"; // 合约所有者
-  const rewardCalculator = "0xE70Cc141a29b8068e76D517F722E67dDf6ba460d"; // 奖励计算器
+  const rewardCalculator = "0xfB57b44AD98f04f902e4dEf59B115caBb2E55186"; // 奖励计算器
   const signers = [
     "0xDfc38b97bCc82B16802e676fbB939623F9EA5b4f",
     "0xeCe513834253230680a4D88D592E0bE79d1202Db",

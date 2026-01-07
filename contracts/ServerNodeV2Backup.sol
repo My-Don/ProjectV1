@@ -243,6 +243,15 @@ contract ServerNodeV2Backup is
         uint256 amount,
         uint256 nodeId
     );
+    event NodeDeallocated(
+        address indexed user,
+        address indexed stakeAddress,
+        uint8 nodeType,
+        uint256 amount,
+        uint256 nodeId
+    );
+    event NodePaused(uint256 indexed nodeId);
+    event NodeUnpaused(uint256 indexed nodeId);
     event AllocationPaused(address indexed admin);
     event AllocationUnpaused(address indexed admin);
     event NodeAllocationRewardPaused(address indexed admin);
@@ -448,6 +457,94 @@ contract ServerNodeV2Backup is
                 allocations[i].amount
             );
         }
+    }
+
+    /**
+     * @dev 取消分配单个节点（外部调用）
+     * @param user 用户地址
+     * @param stakeAddress 质押地址
+     * @param nodeType 节点类型
+     * @param amount 分配金额
+     * @param nodeId 节点ID
+     * 功能：取消之前的节点分配，从记录中移除并更新节点容量
+     */
+    function deallocateNodes(
+        address user,
+        address stakeAddress,
+        uint8 nodeType,
+        uint256 amount,
+        uint256 nodeId
+    ) external onlyOwner whenNotPaused {
+        // 检查参数
+        require(user != address(0), "Invalid user");
+        require(stakeAddress != address(0), "Invalid stake address");
+        require(nodeId > 0, "Invalid node ID");
+        require(amount > 0, "Invalid amount");
+
+        // 检查节点是否存在
+        bool nodeExists = false;
+        for (uint i = 0; i < deployNode.length; i++) {
+            if (deployNode[i].id == nodeId) {
+                nodeExists = true;
+                break;
+            }
+        }
+        require(nodeExists, "Node does not exist");
+
+        // 从用户分配记录中移除
+        AllocationRecord[] storage userRecords = userAllocationRecords[user];
+        bool found = false;
+        for (uint i = 0; i < userRecords.length; i++) {
+            AllocationRecord storage record = userRecords[i];
+            if (
+                record.stakeAddress == stakeAddress &&
+                record.nodeType == nodeType &&
+                record.amount == amount &&
+                record.nodeId == nodeId
+            ) {
+                // 移除记录
+                userRecords[i] = userRecords[userRecords.length - 1];
+                userRecords.pop();
+                found = true;
+                break;
+            }
+        }
+        require(found, "Allocation record not found for user");
+
+        // 从节点分配记录中移除
+        AllocationRecord[] storage nodeRecords = nodeAllocationRecords[nodeId];
+        bool nodeRecordFound = false;
+        for (uint i = 0; i < nodeRecords.length; i++) {
+            AllocationRecord storage record = nodeRecords[i];
+            if (
+                record.user == user &&
+                record.stakeAddress == stakeAddress &&
+                record.nodeType == nodeType &&
+                record.amount == amount
+            ) {
+                // 移除记录
+                nodeRecords[i] = nodeRecords[nodeRecords.length - 1];
+                nodeRecords.pop();
+                nodeRecordFound = true;
+                break;
+            }
+        }
+        require(nodeRecordFound, "Allocation record not found for node");
+
+        // 更新节点累计分配金额
+        require(
+            nodeTotalAllocated[nodeId] >= amount,
+            "Insufficient allocated amount to deallocate"
+        );
+        nodeTotalAllocated[nodeId] -= amount;
+
+        // 如果是大节点且分配金额为100万，重置大节点标记
+        if (nodeType == 1 && amount == DEFAULT_CAPACITY) {
+            isNodeAllocatedAsBig[nodeId] = false;
+        }
+
+        // 触发取消分配事件
+        emit NodeDeallocated(user, stakeAddress, nodeType, amount, nodeId);
     }
 
     /**
@@ -1051,6 +1148,35 @@ contract ServerNodeV2Backup is
     }
 
     /**
+     * @dev 暂停指定节点（只有管理员能调用）
+     * @param nodeId 要暂停的节点ID
+     * 功能：暂停节点后，该节点的分配记录将不参与奖励计算
+     */
+    function pauseNode(uint256 nodeId) external onlyOwner {
+        require(nodeId > 0, "Invalid node ID");
+        uint256 index = nodeIndexById[nodeId];
+        require(index < deployNode.length, "Node not found");
+        require(deployNode[index].id == nodeId, "Node index mismatch");
+        
+        deployNode[index].isActive = false;
+        emit NodePaused(nodeId);
+    }
+
+    /**
+     * @dev 恢复指定节点（只有管理员能调用）
+     * @param nodeId 要恢复的节点ID
+     */
+    function unpauseNode(uint256 nodeId) external onlyOwner {
+        require(nodeId > 0, "Invalid node ID");
+        uint256 index = nodeIndexById[nodeId];
+        require(index < deployNode.length, "Node not found");
+        require(deployNode[index].id == nodeId, "Node index mismatch");
+        
+        deployNode[index].isActive = true;
+        emit NodeUnpaused(nodeId);
+    }
+
+    /**
      * @dev 从用户的分配记录中获取质押地址及其对应的等效值
      * @param user 用户地址
      * @return 质押地址数组和对应的等效值数组
@@ -1059,44 +1185,50 @@ contract ServerNodeV2Backup is
         AllocationRecord[] storage records = userAllocationRecords[user];
         require(records.length > 0, "No allocation records found for user");
         
-        // 首先收集所有唯一的质押地址
+        // 首先收集所有唯一的质押地址和对应的活动节点分配金额
         address[] memory allStakeAddresses = new address[](records.length);
+        uint256[] memory stakeAmounts = new uint256[](records.length);
         uint256 uniqueCount = 0;
         
-        // 第一次遍历：收集唯一质押地址
+        // 第一次遍历：收集唯一质押地址和对应的活动节点分配金额
         for (uint256 i = 0; i < records.length; i++) {
-            address stakeAddress = records[i].stakeAddress;
+            AllocationRecord storage record = records[i];
+            // 检查节点是否活动
+            uint256 nodeId = record.nodeId;
+            uint256 nodeIndex = nodeIndexById[nodeId];
+            if (nodeIndex >= deployNode.length || !deployNode[nodeIndex].isActive) {
+                continue; // 跳过非活动节点的分配记录
+            }
+            
+            address stakeAddress = record.stakeAddress;
             bool isUnique = true;
             
             // 检查是否已经存在
             for (uint256 j = 0; j < uniqueCount; j++) {
                 if (allStakeAddresses[j] == stakeAddress) {
                     isUnique = false;
+                    stakeAmounts[j] += record.amount;
                     break;
                 }
             }
             
             if (isUnique) {
                 allStakeAddresses[uniqueCount] = stakeAddress;
+                stakeAmounts[uniqueCount] = record.amount;
                 uniqueCount++;
             }
         }
+        
+        require(uniqueCount > 0, "No active node allocation records found for user");
         
         // 创建结果数组
         address[] memory stakeAddresses = new address[](uniqueCount);
         uint256[] memory equivalents = new uint256[](uniqueCount);
         
-        // 第二次遍历：计算每个质押地址的总分配金额和等效值
+        // 计算每个质押地址的等效值
         for (uint256 i = 0; i < uniqueCount; i++) {
             address stakeAddress = allStakeAddresses[i];
-            uint256 totalAmount = 0;
-            
-            // 计算该质押地址的总分配金额
-            for (uint256 j = 0; j < records.length; j++) {
-                if (records[j].stakeAddress == stakeAddress) {
-                    totalAmount += records[j].amount;
-                }
-            }
+            uint256 totalAmount = stakeAmounts[i];
             
             // 计算等效值：(分配金额 × 精度) / 100万
             uint256 equivalent = (totalAmount * SCALE) / DEFAULT_CAPACITY;

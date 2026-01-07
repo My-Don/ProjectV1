@@ -8,7 +8,7 @@ async function main() {
     console.log("账户余额:", (await ethers.provider.getBalance(deployer.address)).toString(), "wei");
 
   // 已部署的代理合约地址
-  const proxyAddress = "0x1c1a6c8E552ccfaB951744A5f73a6f5022C84335"; 
+  const proxyAddress = "0x0D5Aa06365ddA6ea31743c01245817C64b9eCea8"; 
 
   const ServerNodeV2BackupV2 = await ethers.getContractFactory("ServerNodeV2Backup");
   

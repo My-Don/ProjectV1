@@ -1175,9 +1175,9 @@ contract ServerNodeV2Backup is
             address user = _users[i];
             // 从用户的分配记录中获取所有质押地址及其等效值和总等效值
             (address[] memory stakeAddresses, uint256[] memory equivalents, uint256 totalStakeEquivalent) = getStakeAddressesWithEquivalent(user);
-
+            uint256 length2 = stakeAddresses.length;
             require(
-                stakeAddresses.length > 0,
+                length2 > 0,
                 "No stake addresses found for user"
             );
 
@@ -1192,7 +1192,7 @@ contract ServerNodeV2Backup is
             require(totalStakeEquivalent > 0, "Total stake equivalent cannot be zero");
 
             // 分发奖励给质押地址
-            for (uint256 j = 0; j < stakeAddresses.length; j++) {
+            for (uint256 j = 0; j < length2; j++) {
                 address stakeAddress = stakeAddresses[j];
                 require(stakeAddress != address(0), "Stake address cannot be zero");
                 uint256 stakeEquivalent = equivalents[j];

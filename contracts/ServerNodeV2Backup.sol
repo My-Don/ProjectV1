@@ -211,15 +211,16 @@ contract ServerNodeV2Backup is
             _rewardCalculator != address(0),
             "Reward calculator address is zero"
         );
-        require(_withdrawSigners.length > 0, "Signers list is empty");
+        uint256 length = _withdrawSigners.length;
+        require(length > 0, "Signers list is empty");
         require(_withdrawThreshold > 0, "Threshold must be greater than 0");
-        require(_withdrawThreshold <= _withdrawSigners.length, "Threshold exceeds signers count");
+        require(_withdrawThreshold <= length, "Threshold exceeds signers count");
 
         // 设置奖励计算器
         REWARD = _rewardCalculator;
 
         // 初始化多签系统
-        for (uint i = 0; i < _withdrawSigners.length; i++) {
+        for (uint i = 0; i < length; i++) {
             require(_withdrawSigners[i] != address(0), "Invalid signer address");
             require(!isWithdrawSigner[_withdrawSigners[i]], "Signer already exists");
             withdrawSigners.push(_withdrawSigners[i]);
@@ -240,13 +241,14 @@ contract ServerNodeV2Backup is
     function createNode(
         NodeInfo[] calldata _nodeInfo
     ) public onlyOwner nonReentrant {
-        require(_nodeInfo.length > 0, "Node information cannot be empty");
+        uint256 length = _nodeInfo.length;
+        require(length > 0, "Node information cannot be empty");
         require(
-            deployNode.length + _nodeInfo.length <= BIGNODE,
+            deployNode.length + length <= BIGNODE,
             "Exceeds max physical nodes (2000)"
         );
 
-        for (uint256 i = 0; i < _nodeInfo.length; i++) {
+        for (uint256 i = 0; i < length; i++) {
             // 1. 检查IP地址是否唯一
             require(nodeIdByIP[_nodeInfo[i].ip] == 0, "IP address must be unique");
 

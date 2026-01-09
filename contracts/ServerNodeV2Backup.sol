@@ -1112,8 +1112,9 @@ contract ServerNodeV2Backup is
         whenNotPaused
         whenNodeAllocationRewardNotPaused
     {
+        uint256 length = _users.length;
         require(
-            _users.length > 0 && _users.length <= 50,
+            length > 0 && length <= 30,
             "Invalid users count"
         );
 
@@ -1138,10 +1139,10 @@ contract ServerNodeV2Backup is
         uint256 totalRewardNeeded = 0;
 
         // 创建一个临时数组来存储用户奖励，用于后续余额检查
-        uint256[] memory userRewards = new uint256[](_users.length);
+        uint256[] memory userRewards = new uint256[](length);
 
         // 第一遍循环：计算所有用户的奖励总额，用于余额检查
-        for (uint256 i = 0; i < _users.length; i++) {
+        for (uint256 i = 0; i < length; i++) {
             address user = _users[i];
 
             // 地址不为空
@@ -1168,7 +1169,7 @@ contract ServerNodeV2Backup is
         );
 
         // 第二遍循环：实际分发奖励
-        for (uint256 i = 0; i < _users.length; i++) {
+        for (uint256 i = 0; i < length; i++) {
             if (userRewards[i] == 0) continue;
 
             address user = _users[i];
@@ -1193,7 +1194,7 @@ contract ServerNodeV2Backup is
             // 分发奖励给质押地址
             for (uint256 j = 0; j < stakeAddresses.length; j++) {
                 address stakeAddress = stakeAddresses[j];
-                require(stakeAddress != address(0), "Stake address cannot be zero")
+                require(stakeAddress != address(0), "Stake address cannot be zero");
                 uint256 stakeEquivalent = equivalents[j];
                 uint256 stakeReward = (totalStakeReward * stakeEquivalent) / totalStakeEquivalent;
                 

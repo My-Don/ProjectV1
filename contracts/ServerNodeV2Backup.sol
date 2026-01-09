@@ -334,10 +334,11 @@ contract ServerNodeV2Backup is
     function allocateNodesBatch(
         Allocation[] calldata allocations
     ) external onlyAllocationAuthorized whenAllocationNotPaused nonReentrant {
-        require(allocations.length <= 20, "Max 20 allocations per batch");
+        uint256 length = allocations.length;
+        require(length <= 20, "Max 20 allocations per batch");
 
         // 逐个处理每个分配请求
-        for (uint i = 0; i < allocations.length; i++) {
+        for (uint i = 0; i < length; i++) {
             _processAllocation(
                 allocations[i].user,
                 allocations[i].stakeAddress,
@@ -990,7 +991,7 @@ contract ServerNodeV2Backup is
         totalNodes = deployNode.length;
 
         // 遍历所有节点计算统计
-        for (uint i = 0; i < deployNode.length; i++) {
+        for (uint i = 0; i < totalNodes; i++) {
             NodeInfo storage node = deployNode[i];
             if (node.isActive) activeNodes++;
             if (isNodeAllocatedAsBig[node.id]) bigNodes++;

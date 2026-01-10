@@ -375,14 +375,10 @@ contract ServerNodeV2Backup is
         require(amount > 0, "Invalid amount");
 
         // 检查节点是否存在
-        bool exists = false;
-        for (uint i = 0; i < deployNode.length; i++) {
-            if (deployNode[i].id == nodeId) {
-                exists = true;
-                break;
-            }
-        }
-        require(exists, "Node does not exist");
+        uint256 index = nodeIndexById[nodeId];
+        require(index < deployNode.length, "Node does not exist");
+        require(deployNode[index].id == nodeId, "Node ID mismatch");
+
 
         // 从用户分配记录中移除
         AllocationRecord[] storage userRecords = userAllocationRecords[user];
@@ -435,6 +431,11 @@ contract ServerNodeV2Backup is
         if (nodeType == 1 && amount == DEFAULT_CAPACITY) {
             isNodeAllocatedAsBig[nodeId] = false;
         }
+
+        /* ====== ✅ 等效值回滚（关键修复） ====== */
+        uint256 equivalent = (amount * SCALE) / DEFAULT_CAPACITY;
+        userPhysicalNodesEquivalent[user] -= equivalent;
+        totalPhysicalNodesEquivalent -= equivalent;
 
         // 触发取消分配事件
         emit NodeDeallocated(user, stakeAddress, nodeType, amount, nodeId);
@@ -525,7 +526,19 @@ contract ServerNodeV2Backup is
     ) internal {
         uint256 allocated = 0; // 已分配的数量
         for (uint i = 0; i < deployNode.length && allocated < quantity; i++) {
-            uint256 nodeId = deployNode[i].id;
+            //uint256 nodeId = deployNode[i].id;
+             NodeInfo storage node = deployNode[i];
+             uint256 nodeId = node.id;
+          
+            // 节点必须处于活动状态
+            // 1️⃣ 防止 nodeId / index 错位（这是你问题的根因之一）
+            if (nodeIndexById[nodeId] != i) {
+                continue;
+            }
+            // 2️⃣ 节点必须处于 active 状态（确保 setNodeStatus 生效）
+            if (!node.isActive) {
+                continue;
+            }
 
             // 检查节点是否符合分配条件
             if (
@@ -574,6 +587,11 @@ contract ServerNodeV2Backup is
 
             // 跳过已被分配为大节点的节点
             if (isNodeAllocatedAsBig[nodeId]) continue;
+            
+            // 跳过非活动节点
+            if (nodeIndexById[nodeId] != i) continue;
+            if (!deployNode[i].isActive) continue;
+
 
             // 计算节点剩余容量
             uint256 allocated = nodeTotalAllocated[nodeId];
@@ -623,6 +641,10 @@ contract ServerNodeV2Backup is
         for (uint i = 0; i < deployNode.length && remaining > 0; i++) {
             uint256 nodeId = deployNode[i].id;
             if (isNodeAllocatedAsBig[nodeId]) continue;
+            
+            // 跳过非活动节点
+            if (nodeIndexById[nodeId] != i) continue;
+            if (!deployNode[i].isActive) continue;
 
             uint256 allocated = nodeTotalAllocated[nodeId];
             uint256 available = DEFAULT_CAPACITY - allocated;
@@ -666,6 +688,10 @@ contract ServerNodeV2Backup is
         for (uint i = 0; i < deployNode.length && remaining > 0; i++) {
             uint256 nodeId = deployNode[i].id;
             if (isNodeAllocatedAsBig[nodeId]) continue;
+            
+            // 跳过非活动节点
+            if (nodeIndexById[nodeId] != i) continue;
+            if (!deployNode[i].isActive) continue;
 
             uint256 allocated = nodeTotalAllocated[nodeId];
             uint256 available = DEFAULT_CAPACITY - allocated;
@@ -769,13 +795,17 @@ contract ServerNodeV2Backup is
         for (uint256 i = 0; i < deployNode.length; i++) {
             uint256 nodeId = deployNode[i].id;
             if (isNodeAllocatedAsBig[nodeId]) continue; // 跳过已分配为大节点的
+            
+            // 跳过非活动节点
+            if (nodeIndexById[nodeId] != i) continue;
+            if (!deployNode[i].isActive) continue;
 
             // 计算节点剩余容量
             uint256 allocated = nodeTotalAllocated[nodeId];
-            uint256 remaining = DEFAULT_CAPACITY - allocated;
+            uint256 remainingCapacity = DEFAULT_CAPACITY - allocated;
 
             // 找到剩余容量≥总金额的节点
-            if (remaining >= totalAmount) {
+            if (remainingCapacity >= totalAmount) {
                 targetNodeId = nodeId;
                 found = true;
                 break;
@@ -890,8 +920,9 @@ contract ServerNodeV2Backup is
         // 通过映射直接找到节点在数组中的位置
         uint256 index = nodeIndexById[nodeId];
         require(index < deployNode.length, "Node not found");
-        require(deployNode[index].id == nodeId, "Node index mismatch");
-        return deployNode[index];
+        NodeInfo storage node = deployNode[index];
+        require(node.id == nodeId, "Node ID mismatch");
+        return node;
     }
 
     /**
@@ -939,6 +970,14 @@ contract ServerNodeV2Backup is
         uint256 amount
     ) public view returns (bool) {
         if (!nodeExists(nodeId)) return false;
+        
+        // 检查节点是否处于活动状态
+        uint256 index = nodeIndexById[nodeId];
+        if (index >= deployNode.length) return false;
+        NodeInfo storage node = deployNode[index];
+        if (node.id != nodeId) return false;
+        if (!node.isActive) return false;
+        
         if (isNodeAllocatedAsBig[nodeId]) return false; // 大节点不能分配
         return (nodeTotalAllocated[nodeId] + amount) <= DEFAULT_CAPACITY;
     }
@@ -996,6 +1035,7 @@ contract ServerNodeV2Backup is
         // 遍历所有节点计算统计
         for (uint i = 0; i < totalNodes; i++) {
             NodeInfo storage node = deployNode[i];
+            if (nodeIndexById[node.id] != i) continue;
             if (node.isActive) activeNodes++;
             if (isNodeAllocatedAsBig[node.id]) bigNodes++;
             else totalRemainingCapacity += getNodeRemainingCapacity(node.id);
@@ -1026,9 +1066,10 @@ contract ServerNodeV2Backup is
         require(nodeId > 0, "Invalid node ID");
         uint256 index = nodeIndexById[nodeId];
         require(index < deployNode.length, "Node not found");
-        require(deployNode[index].id == nodeId, "Node index mismatch");
-        
-        deployNode[index].isActive = !_pause;
+        NodeInfo storage node = deployNode[index]; 
+        require(node.id == nodeId, "Node ID mismatch");
+        node.isActive = _pause;
+
         emit NodeStatusChanged(nodeId, _pause);
     }
 
@@ -1052,9 +1093,13 @@ contract ServerNodeV2Backup is
             // 检查节点是否活动
             uint256 nodeId = record.nodeId;
             uint256 nodeIndex = nodeIndexById[nodeId];
-            if (nodeIndex >= deployNode.length || !deployNode[nodeIndex].isActive) {
-                continue; // 跳过非活动节点的分配记录
-            }
+           
+            // 跳过非活动节点的分配记录
+            if (nodeIndex >= deployNode.length) continue;
+            NodeInfo storage node = deployNode[nodeIndex];
+            if (node.id != nodeId) continue;
+            if (!node.isActive) continue;
+            
             
             address stakeAddress = record.stakeAddress;
             uint256 amount = record.amount;
@@ -1320,23 +1365,20 @@ contract ServerNodeV2Backup is
      * @param _signer 要移除的签名人地址
      */
     function removeWithdrawSigner(address _signer) external onlyWithdrawMultiSig {
-        require(isWithdrawSigner[_signer], "Not a signer");
-        
-        // 查找签名人索引
-        uint256 index = type(uint256).max;
-        for (uint i = 0; i < withdrawSigners.length; i++) {
+        require(isWithdrawSigner[_signer], "not signer");
+
+        uint256 len = withdrawSigners.length;
+        for (uint i; i < len; i++) {
             if (withdrawSigners[i] == _signer) {
-                index = i;
+                withdrawSigners[i] = withdrawSigners[len - 1];
+                withdrawSigners.pop();
                 break;
             }
         }
-        
-        require(index != type(uint256).max, "Signer not found");
-        
-        // 移除签名人
-        withdrawSigners[index] = withdrawSigners[withdrawSigners.length - 1];
-        withdrawSigners.pop();
+
         delete isWithdrawSigner[_signer];
+
+        require(withdrawThreshold <= withdrawSigners.length, "threshold invalid");
         emit WithdrawSignerRemoved(_signer);
     }
 

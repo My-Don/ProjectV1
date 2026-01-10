@@ -284,6 +284,9 @@ contract ServerNodeV2Backup is
             // 通过IP记录节点ID，方便后续查询
             nodeIdByIP[_nodeInfo[i].ip] = newId;
 
+            // 通过节点ID记录索引，方便后续查询
+            nodeIndexById[newId] = deployNode.length - 1;
+
             // 触发创建节点事件
             emit CreateNodeInfo(
                 _nodeInfo[i].ip,

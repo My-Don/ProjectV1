@@ -1060,17 +1060,17 @@ contract ServerNodeV2Backup is
     /**
      * @dev 管理节点状态（暂停/恢复）（只有管理员能调用）
      * @param nodeId 节点ID
-     * @param _pause 是否暂停
+     * @param isActive 是否暂停
      */
-    function setNodeStatus(uint256 nodeId, bool _pause) external onlyOwner {
+    function setNodeStatus(uint256 nodeId, bool isActive) external onlyOwner {
         require(nodeId > 0, "Invalid node ID");
         uint256 index = nodeIndexById[nodeId];
         require(index < deployNode.length, "Node not found");
         NodeInfo storage node = deployNode[index]; 
         require(node.id == nodeId, "Node ID mismatch");
-        node.isActive = _pause;
+        node.isActive = isActive;
 
-        emit NodeStatusChanged(nodeId, _pause);
+        emit NodeStatusChanged(nodeId, isActive);
     }
 
     /**
@@ -1078,210 +1078,219 @@ contract ServerNodeV2Backup is
      * @param user 用户地址
      * @return 质押地址数组和对应的等效值数组
      */
-    function getStakeAddressesWithEquivalent(address user) internal view returns (address[] memory, uint256[] memory, uint256) {
-        AllocationRecord[] storage records = userAllocationRecords[user];
-        require(records.length > 0, "No allocation records found for user");
-        
-        // 使用两个数组来存储唯一质押地址和对应的总金额
-        address[] memory tempAddresses = new address[](records.length);
-        uint256[] memory tempAmounts = new uint256[](records.length);
-        uint256 uniqueCount = 0;
-        
-        // 遍历所有分配记录
-        for (uint256 i = 0; i < records.length; i++) {
-            AllocationRecord storage record = records[i];
-            // 检查节点是否活动
-            uint256 nodeId = record.nodeId;
-            uint256 nodeIndex = nodeIndexById[nodeId];
-           
-            // 跳过非活动节点的分配记录
-            if (nodeIndex >= deployNode.length) continue;
-            NodeInfo storage node = deployNode[nodeIndex];
-            if (node.id != nodeId) continue;
-            if (!node.isActive) continue;
-            
-            
-            address stakeAddress = record.stakeAddress;
-            uint256 amount = record.amount;
-            
-            // 查找地址是否已经存在，使用早期返回优化
-            bool found = false;
-            uint256 j;
-            for (j = 0; j < uniqueCount; j++) {
-                if (tempAddresses[j] == stakeAddress) {
-                    found = true;
-                    break;
-                }
-            }
-            
-            if (found) {
-                // 如果地址已存在，累加金额
-                tempAmounts[j] += amount;
-            } else {
-                // 如果是新地址，添加到数组
-                tempAddresses[uniqueCount] = stakeAddress;
-                tempAmounts[uniqueCount] = amount;
-                uniqueCount++;
+   
+
+ function getStakeAddressesWithEquivalent(address user)
+    public
+    view
+    returns (
+        address[] memory,
+        uint256[] memory,
+        uint256
+    )
+{
+    AllocationRecord[] storage records = userAllocationRecords[user];
+    uint256 len = records.length;
+
+    address[] memory tempAddresses = new address[](len);
+    uint256[] memory tempEquivalents = new uint256[](len);
+
+    uint256 uniqueCount = 0;
+    uint256 totalStakeEquivalent = 0;
+
+    for (uint256 i = 0; i < len; i++) {
+        AllocationRecord storage record = records[i];
+        uint256 nodeId = record.nodeId;
+
+        uint256 nodeIndex = nodeIndexById[nodeId];
+        if (nodeIndex >= deployNode.length) continue;
+        if (deployNode[nodeIndex].id != nodeId) continue;
+
+        // ✅ 关键：只统计 active 节点
+        if (!deployNode[nodeIndex].isActive) continue;
+
+        uint256 equivalent = (record.amount * SCALE) / DEFAULT_CAPACITY;
+        if (equivalent == 0) continue;
+
+        totalStakeEquivalent += equivalent;
+
+        bool found = false;
+        for (uint256 j = 0; j < uniqueCount; j++) {
+            if (tempAddresses[j] == record.stakeAddress) {
+                tempEquivalents[j] += equivalent;
+                found = true;
+                break;
             }
         }
-        
-        require(uniqueCount > 0, "No active node allocation records found for user");
-        
-        // 创建结果数组
-        address[] memory stakeAddresses = new address[](uniqueCount);
-        uint256[] memory equivalents = new uint256[](uniqueCount);
-        uint256 totalEquivalent = 0;
-        
-        // 将临时数组转换为最终结果并计算总等效值
-        for (uint256 i = 0; i < uniqueCount; i++) {
-            uint256 totalAmount = tempAmounts[i];
-            
-            // 计算等效值：(分配金额 × 精度) / 100万
-            uint256 equivalent = (totalAmount * SCALE) / DEFAULT_CAPACITY;
-            
-            stakeAddresses[i] = tempAddresses[i];
-            equivalents[i] = equivalent;
-            totalEquivalent += equivalent;
+
+        if (!found) {
+            tempAddresses[uniqueCount] = record.stakeAddress;
+            tempEquivalents[uniqueCount] = equivalent;
+            uniqueCount++;
         }
-        
-        return (stakeAddresses, equivalents, totalEquivalent);
     }
 
-    // ==================== 奖励分发功能 ====================
+    address[] memory stakeAddresses = new address[](uniqueCount);
+    uint256[] memory equivalents = new uint256[](uniqueCount);
+
+    for (uint256 i = 0; i < uniqueCount; i++) {
+        stakeAddresses[i] = tempAddresses[i];
+        equivalents[i] = tempEquivalents[i];
+    }
+
+    return (stakeAddresses, equivalents, totalStakeEquivalent);
+}
+
+
+
+// ==================== 奖励分发功能 ====================
+
+function _safeRewardTransfer(
+    address to,
+    uint256 amount
+    ) internal {
+        if (to == address(0)) return;
+        if (amount == 0) return;
+
+        uint256 balance = address(this).balance;
+        if (amount > balance) {
+            amount = balance;
+        }
+
+        TransferHelper.safeTransferETH(to, amount);
+}
+
+
 
     /**
      * @dev 分发奖励给用户（只有管理员能调用）
      * @param _users 用户地址数组（最多50个）
      * 规则：1.每人每天只能领一次 2.奖励按等效值比例分配 3.50%给用户，50%给质押地址
      */
-    function configRewards(
-        address[] calldata _users
-    )
-        external
-        onlyOwner
-        nonReentrant
-        whenNotPaused
-        whenNodeAllocationRewardNotPaused
-    {
-        uint256 length = _users.length;
-        require(
-            length > 0 && length <= 30,
-            "Invalid users count"
-        );
+function configRewards(
+    address[] calldata _users
+)
+    external
+    onlyOwner
+    nonReentrant
+    whenNotPaused
+    whenNodeAllocationRewardNotPaused
+{
+    uint256 length = _users.length;
+    require(length > 0 && length <= 30, "Invalid users count");
 
-        // 获取当前奖励信息（从奖励计算器获取）
+    // ===== 1️⃣ 获取今日奖励信息 =====
+    (
+        uint256 dailyReward,
+        uint16 currentYear,
+        uint256 currentDay
+    ) = getCurrentRewardInfo();
+    require(dailyReward > 0, "Daily reward is zero");
+
+    // ===== 2️⃣ 计算有效总等效值（不少于 BASENODE）=====
+    uint256 effectiveTotal = totalPhysicalNodesEquivalent <
+        (BASENODE * SCALE)
+        ? (BASENODE * SCALE)
+        : totalPhysicalNodesEquivalent;
+
+    require(effectiveTotal > 0, "No effective nodes");
+
+    // ===== 3️⃣ 第一轮：计算所有用户应得奖励（不转账）=====
+    uint256[] memory userRewards = new uint256[](length);
+    uint256 totalRewardNeeded = 0;
+
+    for (uint256 i = 0; i < length; i++) {
+        address user = _users[i];
+        if (user == address(0)) continue;
+
+        // 当天已领取，跳过
+        if (lastRewardDay[user][currentYear] >= currentDay) continue;
+
+        uint256 userEquivalent = userPhysicalNodesEquivalent[user];
+        if (userEquivalent == 0) continue;
+
+        uint256 reward = (dailyReward * userEquivalent) / effectiveTotal;
+        if (reward == 0) continue;
+
+        userRewards[i] = reward;
+        totalRewardNeeded += reward;
+    }
+
+    // ===== 4️⃣ 余额兜底 =====
+    require(
+        address(this).balance >= totalRewardNeeded,
+        "Insufficient contract balance"
+    );
+
+    // ===== 5️⃣ 第二轮：实际分发奖励 =====
+    uint256 usersProcessed = 0;
+    uint256 totalDistributed = 0;
+
+    for (uint256 i = 0; i < length; i++) {
+        uint256 totalReward = userRewards[i];
+        if (totalReward == 0) continue;
+
+        address user = _users[i];
+
+        // 再次防御：防止同批次重复
+        if (lastRewardDay[user][currentYear] >= currentDay) continue;
+
+        /**
+         * 只从「仍然 active 的节点」统计质押等效值
+         */
         (
-            uint256 dailyReward,
-            uint16 currentYear,
-            uint256 currentDay
-        ) = getCurrentRewardInfo();
-        require(dailyReward > 0, "Daily reward is zero");
+            address[] memory stakeAddresses,
+            uint256[] memory equivalents,
+            uint256 totalStakeEquivalent
+        ) = getStakeAddressesWithEquivalent(user);
 
-        // 计算有效总量（最少按500个节点算）
-        uint256 effectiveTotal = totalPhysicalNodesEquivalent <
-            (BASENODE * SCALE)
-            ? (BASENODE * SCALE)
-            : totalPhysicalNodesEquivalent;
-        require(effectiveTotal > 0, "No physical nodes sold yet");
+        // 若没有任何 active 节点参与，直接跳过
+        if (totalStakeEquivalent == 0) continue;
 
-        // 合并计算奖励和分发奖励的循环
-        uint256 totalDistributed = 0;
-        uint256 usersProcessed = 0;
-        uint256 totalRewardNeeded = 0;
+        // ===== 奖励拆分：50% 用户 + 50% 质押 =====
+        uint256 userReward = totalReward / 2;
+        uint256 stakeRewardPool = totalReward - userReward;
 
-        // 创建一个临时数组来存储用户奖励，用于后续余额检查
-        uint256[] memory userRewards = new uint256[](length);
+        // ---- 给用户 ----
+        _safeRewardTransfer(user, userReward);
 
-        // 第一遍循环：计算所有用户的奖励总额，用于余额检查
-        for (uint256 i = 0; i < length; i++) {
-            address user = _users[i];
+        // ---- 给质押地址（按等效值比例）----
+        for (uint256 j = 0; j < stakeAddresses.length; j++) {
+            address stakeAddr = stakeAddresses[j];
+            if (stakeAddr == address(0)) continue;
 
-            // 地址不为空
-            require(user != address(0), "User address cannot be zero");
+            uint256 stakeReward = (stakeRewardPool * equivalents[j]) / totalStakeEquivalent;
+            if (stakeReward == 0) continue;
 
-            // 检查今天是否已领取
-            if (lastRewardDay[user][currentYear] >= currentDay) continue;
+            _safeRewardTransfer(stakeAddr, stakeReward);
 
-            uint256 userEquivalent = userPhysicalNodesEquivalent[user];
-            if (userEquivalent == 0) continue;
-
-            // 计算用户应得的每日奖励
-            uint256 totalDailyReward = (dailyReward * userEquivalent) / effectiveTotal;
-            if (totalDailyReward == 0) continue;
-
-            userRewards[i] = totalDailyReward;
-            totalRewardNeeded += totalDailyReward;
-        }
-
-        // 检查合约余额是否足够
-        require(
-            address(this).balance >= totalRewardNeeded,
-            "Insufficient contract balance"
-        );
-
-        // 第二遍循环：实际分发奖励
-        for (uint256 i = 0; i < length; i++) {
-            if (userRewards[i] == 0) continue;
-
-            address user = _users[i];
-            // 从用户的分配记录中获取所有质押地址及其等效值和总等效值
-            (address[] memory stakeAddresses, uint256[] memory equivalents, uint256 totalStakeEquivalent) = getStakeAddressesWithEquivalent(user);
-            uint256 length2 = stakeAddresses.length;
-            require(
-                length2 > 0,
-                "No stake addresses found for user"
-            );
-
-            // 计算分配金额：50%给用户，50%给质押地址
-            uint256 userReward = userRewards[i] / 2;
-            uint256 totalStakeReward = userRewards[i] - userReward;
-
-            // 转账给用户
-            TransferHelper.safeTransferETH(user, userReward);
-
-            // 验证总等效值大于0
-            require(totalStakeEquivalent > 0, "Total stake equivalent cannot be zero");
-
-            // 分发奖励给质押地址
-            for (uint256 j = 0; j < length2; j++) {
-                address stakeAddress = stakeAddresses[j];
-                require(stakeAddress != address(0), "Stake address cannot be zero");
-                uint256 stakeEquivalent = equivalents[j];
-                uint256 stakeReward = (totalStakeReward * stakeEquivalent) / totalStakeEquivalent;
-                
-                if (stakeReward > 0) {
-                    TransferHelper.safeTransferETH(stakeAddress, stakeReward);
-                    // 触发质押地址奖励分发事件
-                    emit StakeRewardDistributed(
-                        user,
-                        stakeAddress,
-                        stakeReward,
-                        currentYear
-                    );
-                }
-            }
-
-            // 立即更新领取记录，防止同批次内重复地址领取
-            lastRewardDay[user][currentYear] = currentDay;
-
-            totalDistributed += userRewards[i];
-            usersProcessed++;
-
-            // 触发奖励分发事件
-            emit RewardDistributed(
+            emit StakeRewardDistributed(
                 user,
-                userReward,
+                stakeAddr,
+                stakeReward,
                 currentYear
             );
         }
 
-        // 触发批量奖励分发事件
-        emit BatchRewardsDistributed(
-            usersProcessed,
-            totalDistributed,
+        // ===== 记录已领取 =====
+        lastRewardDay[user][currentYear] = currentDay;
+
+        usersProcessed++;
+        totalDistributed += totalReward;
+
+        emit RewardDistributed(
+            user,
+            userReward,
             currentYear
         );
     }
+
+    emit BatchRewardsDistributed(
+        usersProcessed,
+        totalDistributed,
+        currentYear
+    );
+}
 
     /**
      * @dev 获取当前奖励信息
@@ -1352,7 +1361,7 @@ contract ServerNodeV2Backup is
      * @dev 添加多签签名人
      * @param _signer 要添加的签名人地址
      */
-    function addWithdrawSigner(address _signer) external onlyWithdrawMultiSig {
+    function addWithdrawSigner(address _signer) external onlyOwner {
         require(_signer != address(0), "Invalid address");
         require(!isWithdrawSigner[_signer], "Already a signer");
         withdrawSigners.push(_signer);
@@ -1364,7 +1373,7 @@ contract ServerNodeV2Backup is
      * @dev 移除多签签名人
      * @param _signer 要移除的签名人地址
      */
-    function removeWithdrawSigner(address _signer) external onlyWithdrawMultiSig {
+    function removeWithdrawSigner(address _signer) external onlyOwner {
         require(isWithdrawSigner[_signer], "not signer");
 
         uint256 len = withdrawSigners.length;

@@ -259,6 +259,7 @@ contract ServerNodeV2Backup is
 
             // 2. 所有节点容量固定为100万
             uint256 capacity = DEFAULT_CAPACITY;
+            bool  isActive = true;
 
             // 生成新的节点ID
             _counter.increment();
@@ -269,7 +270,7 @@ contract ServerNodeV2Backup is
                 NodeInfo({
                     ip: _nodeInfo[i].ip,
                     name: _nodeInfo[i].name,
-                    isActive: true,
+                    isActive: isActive,
                     nodeStakeAddress: _nodeInfo[i].nodeStakeAddress,
                     id: newId,
                     createTime: _nodeInfo[i].createTime == 0
@@ -291,7 +292,7 @@ contract ServerNodeV2Backup is
             emit CreateNodeInfo(
                 _nodeInfo[i].ip,
                 _nodeInfo[i].name,
-                true,
+                isActive,
                 _nodeInfo[i].nodeStakeAddress,
                 newId,
                 capacity

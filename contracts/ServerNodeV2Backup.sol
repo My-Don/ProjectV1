@@ -269,7 +269,7 @@ contract ServerNodeV2Backup is
                 NodeInfo({
                     ip: _nodeInfo[i].ip,
                     name: _nodeInfo[i].name,
-                    isActive: _nodeInfo[i].isActive,
+                    isActive: true,
                     nodeStakeAddress: _nodeInfo[i].nodeStakeAddress,
                     id: newId,
                     createTime: _nodeInfo[i].createTime == 0
@@ -291,7 +291,7 @@ contract ServerNodeV2Backup is
             emit CreateNodeInfo(
                 _nodeInfo[i].ip,
                 _nodeInfo[i].name,
-                _nodeInfo[i].isActive,
+                true,
                 _nodeInfo[i].nodeStakeAddress,
                 newId,
                 capacity

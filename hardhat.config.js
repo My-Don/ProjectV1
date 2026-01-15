@@ -146,12 +146,12 @@ module.exports = {
       accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
       chainId: parseInt(process.env.BEE_MAINNET_CHAIN_ID)
     },
-    arbTestnet: {
+    arbitrumSepolia: {
       url: process.env.ARB_SEPOLIA_RPC_URL,
       accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
       chainId: parseInt(process.env.ARB_SEPOLIA_CHAIN_ID)
     },
-    baseTestnet: {
+    baseSepolia: {
       url: process.env.BASE_SEPOLIA_RPC_URL,
       accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
       chainId: parseInt(process.env.BASE_SEPOLIA_CHIAN_ID)
@@ -166,7 +166,9 @@ module.exports = {
       bsc: process.env.BSCSCAN_API_KEY,
       bscTestnet: process.env.BSCSCAN_API_KEY,
       sepolia: process.env.ETHERSCAN_API_KEY,
-      bee: process.env.BEECHAIN_API_KEY
+      bee: process.env.BEECHAIN_API_KEY,
+      arbitrumSepolia: process.env.ETHERSCAN_API_KEY,
+      baseSepolia: process.env.ETHERSCAN_API_KEY
     },
     customChains: [
       {
@@ -215,6 +217,22 @@ module.exports = {
         urls: {
           apiURL: "https://scan.beechain.ai/api",
           browserURL: "https://scan.beechain.ai"
+        }
+      },
+       {
+        network: "arbitrumSepolia",
+        chainId: parseInt(process.env.ARB_SEPOLIA_CHAIN_ID),
+        urls: {
+          apiURL: "https://api.etherscan.io/v2/api?chainid=421614",
+          browserURL: "https://sepolia.arbiscan.io/"
+        }
+      },
+      {
+        network: "baseSepolia",
+        chainId: parseInt(process.env.BASE_SEPOLIA_CHIAN_ID),
+        urls: {
+          apiURL: "https://api.etherscan.io/v2/api?chainid=84532",
+          browserURL: "https://sepolia.basescan.org/"
         }
       }
     ]

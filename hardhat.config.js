@@ -166,7 +166,7 @@ module.exports = {
       bsc: process.env.BSCSCAN_API_KEY,
       bscTestnet: process.env.BSCSCAN_API_KEY,
       sepolia: process.env.ETHERSCAN_API_KEY,
-      bee: process.env.BEECHAIN_API_KEY,
+      beechain: process.env.BEECHAIN_API_KEY,
       arbitrumSepolia: process.env.ETHERSCAN_API_KEY,
       baseSepolia: process.env.ETHERSCAN_API_KEY
     },

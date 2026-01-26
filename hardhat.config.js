@@ -19,6 +19,16 @@ module.exports = {
   solidity: {
     compilers: [
       {
+        version: "0.8.22",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200
+          },
+          viaIR: true
+        }
+      },
+      {
         version: "0.8.0",
         settings: {
           optimizer: {
@@ -141,7 +151,7 @@ module.exports = {
       accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
       chainId: parseInt(process.env.MONAD_MAINNET_CHAIN_ID)
     },
-    beechain: {
+    beechainMainnet: {
       url: process.env.BEE_MAINNET_RPC_URL,
       accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
       chainId: parseInt(process.env.BEE_MAINNET_CHAIN_ID)
@@ -166,7 +176,7 @@ module.exports = {
       bsc: process.env.BSCSCAN_API_KEY,
       bscTestnet: process.env.BSCSCAN_API_KEY,
       sepolia: process.env.ETHERSCAN_API_KEY,
-      beechain: process.env.BEECHAIN_API_KEY,
+      beechainMainnet: process.env.BEECHAIN_API_KEY,
       arbitrumSepolia: process.env.ETHERSCAN_API_KEY,
       baseSepolia: process.env.ETHERSCAN_API_KEY
     },
@@ -175,7 +185,7 @@ module.exports = {
         network: "monadTestnet",
         chainId: parseInt(process.env.MONAD_TESTNET_CHAIN_ID),
         urls: {
-          apiURL: "https://api.etherscan.io/v2/api?chainid=10143",
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.MONAD_TESTNET_CHAIN_ID)}`,
           browserURL: "https://testnet.monadscan.com"
         }
       },
@@ -183,7 +193,7 @@ module.exports = {
         network: "monadMainnet",
         chainId: parseInt(process.env.MONAD_MAINNET_CHAIN_ID),
         urls: {
-          apiURL: "https://api.etherscan.io/v2/api?chainid=143",
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.MONAD_MAINNET_CHAIN_ID)}`,
           browserURL: "https://monadscan.com"
         }
       },
@@ -191,7 +201,7 @@ module.exports = {
         network: "bscTestnet",
         chainId: parseInt(process.env.BSC_TESTNET_CHAIN_ID),
         urls: {
-          apiURL: "https://api.etherscan.io/v2/api?chainid=97",
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.BSC_TESTNET_CHAIN_ID)}`,
           browserURL: "https://testnet.bscscan.com"
         }
       },
@@ -199,23 +209,23 @@ module.exports = {
         network: "bsc",
         chainId: parseInt(process.env.BSC_MAINNET_CHAIN_ID),
         urls: {
-          apiURL: "https://api.etherscan.io/v2/api?chainid=56",
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.BSC_MAINNET_CHAIN_ID)}`,
           browserURL: "https://bscscan.com"
         }
       },
       {
         network: "sepolia",
-        chainId: parseInt(process.env.SEPOLIA_CHAIAN_ID),
+        chainId: parseInt(process.env.SEPOLIA_CHAIN_ID),
         urls: {
-          apiURL: "https://api-sepolia.etherscan.io/api",
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.SEPOLIA_CHAIN_ID)}`,
           browserURL: "https://sepolia.etherscan.io"
         }
       },
       {
-        network: "beechain",
+        network: "beechainMainnet",
         chainId: parseInt(process.env.BEE_MAINNET_CHAIN_ID),
         urls: {
-          apiURL: "https://scan.beechain.ai/api",
+          apiURL: `https://scan.beechain.ai/api`,
           browserURL: "https://scan.beechain.ai"
         }
       },
@@ -223,15 +233,15 @@ module.exports = {
         network: "arbitrumSepolia",
         chainId: parseInt(process.env.ARB_SEPOLIA_CHAIN_ID),
         urls: {
-          apiURL: "https://api.etherscan.io/v2/api?chainid=421614",
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.ARB_SEPOLIA_CHAIN_ID)}`,
           browserURL: "https://sepolia.arbiscan.io/"
         }
       },
       {
         network: "baseSepolia",
-        chainId: parseInt(process.env.BASE_SEPOLIA_CHIAN_ID),
+        chainId: parseInt(process.env.BASE_SEPOLIA_CHAIN_ID),
         urls: {
-          apiURL: "https://api.etherscan.io/v2/api?chainid=84532",
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.BASE_SEPOLIA_CHAIN_ID)}`,
           browserURL: "https://sepolia.basescan.org/"
         }
       }

@@ -24,9 +24,6 @@ async function main() {
 //   console.log("合约符号:", contractSymbol);
 //   console.log("总供应量:", ethers.formatEther(contractTotalSupply));
 
-  // 等待几个区块确认
-  console.log("\n等待区块确认...");
-
 }
 
 main()
@@ -34,4 +31,5 @@ main()
   .catch((error) => {
     console.error(error);
     process.exit(1);
+
   });

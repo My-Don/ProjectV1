@@ -122,7 +122,7 @@ module.exports = {
     sepolia: {
       url: process.env.SEPOLIA_RPC_URL || "",
       accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
-      chainId: parseInt(process.env.SEPOLIA_CHAIAN_ID),
+      chainId: parseInt(process.env.SEPOLIA_CHAIN_ID),
       // 增加超时时间，防止网络问题
       timeout: 120000, // 120秒
       gasPrice: "auto"

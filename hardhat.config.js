@@ -169,7 +169,6 @@ module.exports = {
   },
   etherscan: {
     enabled: true,
-    // 使用新的 v2 API 配置
     apiKey: {
       monadMainnet: process.env.ETHERSCAN_API_KEY,
       monadTestnet: process.env.ETHERSCAN_API_KEY,

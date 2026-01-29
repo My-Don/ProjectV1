@@ -12,7 +12,7 @@ interface IUniswapV2Pair {
 
 /**
  * @title SwapTrade 合约
- * @dev 一个基于 Uniswap V2 的代币交换和流动性管理合约
+ * @dev 一个基于 Uniswap V2 的代币兑换和流动性管理合约
  * @notice 提供代币兑换、添加/移除流动性等功能，支持自动选择最优交易路径
  */
 contract SwapTrade is Ownable, ReentrancyGuard {
@@ -74,7 +74,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
     );
 
     event SwapEvent(
-        address indexed user,        // 发起交换的用户地址
+        address indexed user,        // 发起兑换的用户地址
         address indexed tokenIn,     // 输入代币地址
         address indexed tokenOut,    // 输出代币地址
         uint256 amountIn,            // 输入代币数量
@@ -96,7 +96,6 @@ contract SwapTrade is Ownable, ReentrancyGuard {
         address _usdt,
         address _uniswapV2Router
     ) Ownable(msg.sender) {
-        // 检查输入地址是否为零地址
         require(
             _uniswapV2Router != address(0) &&
                 _bkc != address(0) &&
@@ -105,7 +104,6 @@ contract SwapTrade is Ownable, ReentrancyGuard {
             "zero address"
         );
 
-        // 初始化核心地址
         uniswapV2Router = _uniswapV2Router;
 
         // 从路由器获取工厂地址
@@ -115,7 +113,6 @@ contract SwapTrade is Ownable, ReentrancyGuard {
         require(success && data.length > 0, "factory() failed");
         factory = abi.decode(data, (address));
 
-        // 初始化代币地址
         bkc = _bkc;
         snc = _snc;
         usdt = _usdt;
@@ -151,7 +148,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
         address tokenA,
         address tokenB
     ) internal view returns (address pair) {
-        // 调用工厂合约的 getPair 方法获取交易对地址
+        // 获取交易对地址
         (bool ok, bytes memory data) = factory.staticcall(
             abi.encodeWithSignature("getPair(address,address)", tokenA, tokenB)
         );
@@ -243,7 +240,6 @@ contract SwapTrade is Ownable, ReentrancyGuard {
         );
         require(ok && data.length > 0, "quote failed");
 
-        // 解码返回数据，获取输出数量
         uint256[] memory amounts = abi.decode(data, (uint256[]));
         amountOut = amounts[amounts.length - 1];
     }
@@ -270,7 +266,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
         if (!ok || data.length == 0) {
             return 0;
         }
-        // 解码返回数据，获取输出数量
+
         uint256[] memory amounts = abi.decode(data, (uint256[]));
         amountOut = amounts[amounts.length - 1];
     }
@@ -289,7 +285,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev 代币交换核心逻辑
+     * @dev 代币兑换核心逻辑
      * @notice 支持自动选择最优交易路径
      * @param tokenIn 输入代币地址
      * @param tokenOut 输出代币地址
@@ -323,7 +319,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
             ? block.timestamp + 300  // 默认 5 分钟
             : deadline;
 
-        // 调用路由器执行交换
+        // 调用路由器执行兑换
         (bool success, bytes memory data) = uniswapV2Router.call(
             abi.encodeWithSignature(
                 "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)",
@@ -362,7 +358,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev 自动算滑点的代币交换
+     * @dev 自动算滑点的代币兑换
      * @param tokenIn 输入代币地址
      * @param tokenOut 输出代币地址
      * @param amountIn 输入代币数量
@@ -396,10 +392,10 @@ contract SwapTrade is Ownable, ReentrancyGuard {
 
         // 计算最小接收数量
         uint256 minOut = _amountOutMin(quotedOut, slippageBps);
-        // 执行交换
+        // 执行兑换
         amountOut = _swap(tokenIn, tokenOut, amountIn, minOut, to, deadline);
 
-        // 触发交换事件
+        // 触发兑换事件
         emit SwapEvent(msg.sender, tokenIn, tokenOut, amountIn, amountOut);
     }
 
@@ -432,7 +428,6 @@ contract SwapTrade is Ownable, ReentrancyGuard {
             ? block.timestamp + 300  // 默认 5 分钟
             : p.deadline;
 
-        // 调用路由器添加流动性
         (bool success, bytes memory returnData) = uniswapV2Router.call(
             abi.encodeWithSignature(
                 "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)",
@@ -448,7 +443,6 @@ contract SwapTrade is Ownable, ReentrancyGuard {
         );
         require(success && returnData.length > 0, "addLiquidity failed");
 
-        // 解码返回数据
         (uint256 amountAActual, uint256 amountBActual, uint256 liquidity) = abi
             .decode(returnData, (uint256, uint256, uint256));
 
@@ -506,7 +500,6 @@ contract SwapTrade is Ownable, ReentrancyGuard {
         require(pair != address(0), "Pair not exist");
         require(pair == lpToken, "LP token mismatch");
 
-        // 确保流动性代币已授权给路由器
         uint256 allowance = IERC20(lpToken).allowance(
             address(this),
             uniswapV2Router
@@ -535,7 +528,6 @@ contract SwapTrade is Ownable, ReentrancyGuard {
         );
         require(success && returnData.length > 0, "removeLiquidity failed");
 
-        // 解码返回数据
         (uint256 amountA, uint256 amountB) = abi.decode(
             returnData,
             (uint256, uint256)

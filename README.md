@@ -26,3 +26,12 @@ ServerNodev2 deployed to:                   0xb98F569930a2e2F097D98A5186f1e77e1A
 MultDistributionToken deployed to:          0xA23E1e37a4dF0742069552c0321CdFfE3C6647cd
 
 ```
+
+```shell
+ERC-8004 = 面向「用户 + 前端钱包」的订阅 / 授权支付协议
+x402 = 面向「服务 + 后端私钥」的自动化 API 支付协议
+x402协议官网https://www.x402.org/
+x402协议浏览器https://www.x402scan.com/
+erc8004协议非官方,但但内容来自提案者与生态，https://8004.org/
+erc8004浏览器https://www.8004scan.io/
+```

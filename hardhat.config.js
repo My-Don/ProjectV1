@@ -128,12 +128,12 @@ module.exports = {
       gasPrice: "auto"
     },
     bscTestnet: {
-      url: process.env.BSCTEST_RPC_URL || "",
+      url: process.env.BSC_TESTNET_RPC_URL || "",
       accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
       chainId: parseInt(process.env.BSC_TESTNET_CHAIN_ID)
     },
     bsc: {
-      url: process.env.BSCMAINNET_RPC_URL || "",
+      url: process.env.BSC_MAINNET_RPC_URL || "",
       accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
       chainId: parseInt(process.env.BSC_MAINNET_CHAIN_ID)
     },
@@ -169,11 +169,12 @@ module.exports = {
   },
   etherscan: {
     enabled: true,
+    // 使用新的 v2 API 配置
     apiKey: {
       monadMainnet: process.env.ETHERSCAN_API_KEY,
       monadTestnet: process.env.ETHERSCAN_API_KEY,
-      bsc: process.env.BSCSCAN_API_KEY,
-      bscTestnet: process.env.BSCSCAN_API_KEY,
+      bsc: process.env.BSC_SCAN_BACKUP_API_KEY,
+      bscTestnet: process.env.BSC_SCAN_BACKUP_API_KEY,
       sepolia: process.env.ETHERSCAN_API_KEY,
       beechainMainnet: process.env.BEECHAIN_API_KEY,
       arbitrumSepolia: process.env.ETHERSCAN_API_KEY,
@@ -185,7 +186,7 @@ module.exports = {
         chainId: parseInt(process.env.MONAD_TESTNET_CHAIN_ID),
         urls: {
           apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.MONAD_TESTNET_CHAIN_ID)}`,
-          browserURL: "https://testnet.monadscan.com"
+          browserURL: process.env.MONAD_TESTNET_ETHERSCAN_URL
         }
       },
       {
@@ -193,7 +194,7 @@ module.exports = {
         chainId: parseInt(process.env.MONAD_MAINNET_CHAIN_ID),
         urls: {
           apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.MONAD_MAINNET_CHAIN_ID)}`,
-          browserURL: "https://monadscan.com"
+          browserURL: process.env.MONAD_MAINNET_ETHERSCAN_URL
         }
       },
       {
@@ -201,7 +202,7 @@ module.exports = {
         chainId: parseInt(process.env.BSC_TESTNET_CHAIN_ID),
         urls: {
           apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.BSC_TESTNET_CHAIN_ID)}`,
-          browserURL: "https://testnet.bscscan.com"
+          browserURL: process.env.BSC_TESTNET_ETHERSCAN_URL
         }
       },
       {
@@ -209,7 +210,7 @@ module.exports = {
         chainId: parseInt(process.env.BSC_MAINNET_CHAIN_ID),
         urls: {
           apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.BSC_MAINNET_CHAIN_ID)}`,
-          browserURL: "https://bscscan.com"
+          browserURL: process.env.BSC_MAINNET_ETHERSCAN_URL
         }
       },
       {
@@ -217,15 +218,15 @@ module.exports = {
         chainId: parseInt(process.env.SEPOLIA_CHAIN_ID),
         urls: {
           apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.SEPOLIA_CHAIN_ID)}`,
-          browserURL: "https://sepolia.etherscan.io"
+          browserURL: process.env.SEPOLIA_ETHERSCAN_URL
         }
       },
       {
         network: "beechainMainnet",
         chainId: parseInt(process.env.BEE_MAINNET_CHAIN_ID),
         urls: {
-          apiURL: `https://scan.beechain.ai/api`,
-          browserURL: "https://scan.beechain.ai"
+          apiURL: process.env.BEECHAIN_API_URL,
+          browserURL: process.env.BEECHAIN_ETHERSCAN_URL
         }
       },
        {
@@ -233,7 +234,7 @@ module.exports = {
         chainId: parseInt(process.env.ARB_SEPOLIA_CHAIN_ID),
         urls: {
           apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.ARB_SEPOLIA_CHAIN_ID)}`,
-          browserURL: "https://sepolia.arbiscan.io/"
+          browserURL: process.env.ARB_SEPOLIA_ETHERSCAN_URL
         }
       },
       {
@@ -241,7 +242,7 @@ module.exports = {
         chainId: parseInt(process.env.BASE_SEPOLIA_CHAIN_ID),
         urls: {
           apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.BASE_SEPOLIA_CHAIN_ID)}`,
-          browserURL: "https://sepolia.basescan.org/"
+          browserURL: process.env.BASE_SEPOLIA_ETHERSCAN_URL
         }
       }
     ]

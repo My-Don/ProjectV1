@@ -1165,7 +1165,7 @@ function _safeRewardTransfer(
 
     /**
      * @dev 分发奖励给用户（只有管理员能调用）
-     * @param _users 用户地址数组（最多50个）
+     * @param _users 用户地址数组（最多30个）
      * 规则：1.每人每天只能领一次 2.奖励按等效值比例分配 3.50%给用户，50%给质押地址
      */
 function configRewards(

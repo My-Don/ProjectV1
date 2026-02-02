@@ -1020,4 +1020,136 @@ describe("ServerNodeV2Backup 完整测试", function () {
     });
   });
 
+  // ==================== 21. 未测试功能补充测试 ====================
+  describe("21. 未测试功能补充测试", function () {
+    beforeEach(async function () {
+      // 创建测试节点
+      for (let i = 1; i <= 3; i++) {
+        await serverNodeV2Backup.connect(owner).createNode([{
+          ip: `192.168.1.${700 + i}`,
+          describe: `Test Node ${i}`,
+          name: `Test-${i}`,
+          isActive: true,
+          nodeStakeAddress: owner.address,
+          id: 0,
+          capacity: 0,
+          createTime: 0,
+          blockHeight: 0
+        }]);
+      }
+      await serverNodeV2Backup.connect(owner).setWhiteList(admin.address, true);
+    });
+
+    // 1. 节点统计查询测试
+    it("应该正确查询节点统计信息", async function () {
+      // 分配一个大节点
+      await serverNodeV2Backup.connect(admin).allocateNodes(user1.address, admin.address, 1, 1, 0);
+      
+      // 查询节点统计
+      const [totalNodes, activeNodes, bigNodes, totalRemainingCapacity] = await serverNodeV2Backup.getNodeStatistics();
+      
+      expect(totalNodes).to.equal(3n);
+      expect(activeNodes).to.equal(3n);
+      expect(bigNodes).to.equal(1n);
+      expect(totalRemainingCapacity).to.be.gt(0n);
+    });
+
+    // 2. 分配可行性检查测试
+    it("应该正确检查节点分配可行性", async function () {
+      // 检查未分配节点的可行性
+      const canAllocate = await serverNodeV2Backup.canAllocateToNode(1, 100000n);
+      expect(canAllocate).to.be.true;
+      
+      // 分配满节点
+      await serverNodeV2Backup.connect(admin).allocateNodes(user1.address, admin.address, 1, 1, 0);
+      
+      // 检查已分配大节点的可行性
+      const canAllocateAfter = await serverNodeV2Backup.canAllocateToNode(1, 100000n);
+      expect(canAllocateAfter).to.be.false;
+    });
+
+    // 3. 节点存在性检查测试
+    it("应该正确检查节点存在性", async function () {
+      // 检查存在的节点
+      const exists = await serverNodeV2Backup.nodeExists(1);
+      expect(exists).to.be.true;
+      
+      // 检查不存在的节点
+      const notExists = await serverNodeV2Backup.nodeExists(999);
+      expect(notExists).to.be.false;
+    });
+
+    // 4. 节点已分配总额测试
+    it("应该正确查询节点已分配总额", async function () {
+      // 分配中节点
+      await serverNodeV2Backup.connect(admin).allocateNodes(user1.address, admin.address, 2, 2, 0);
+      
+      // 查询已分配总额
+      const totalAllocated = await serverNodeV2Backup.getNodeTotalAllocated(1);
+      expect(totalAllocated).to.equal(400000n);
+    });
+
+    // 5. 质押地址查询测试
+    it("应该正确查询质押地址和等效值", async function () {
+      // 分配节点给用户
+      await serverNodeV2Backup.connect(admin).allocateNodes(user1.address, admin.address, 2, 2, 0);
+      
+      // 查询质押地址和等效值
+      const [stakeAddresses, equivalents, totalStakeEquivalent] = await serverNodeV2Backup.getStakeAddressesWithEquivalent(user1.address);
+      
+      expect(stakeAddresses.length).to.equal(1);
+      expect(stakeAddresses[0]).to.equal(admin.address);
+      expect(equivalents.length).to.equal(1);
+      expect(totalStakeEquivalent).to.gt(0n);
+    });
+
+    // 6. 奖励管理测试
+    it("应该允许管理员暂停和恢复奖励分发", async function () {
+      // 暂停奖励
+      await serverNodeV2Backup.connect(owner).pauseRewards();
+      
+      // 恢复奖励
+      await serverNodeV2Backup.connect(owner).unpauseRewards();
+      
+      // 验证操作成功（无错误抛出）
+      expect(true).to.be.true;
+    });
+
+    // 7. 提案确认状态测试
+    it("应该正确查询提案确认状态", async function () {
+      // 向合约发送ETH作为余额
+      const ethAmount = ethers.parseEther("200");
+      await owner.sendTransaction({ to: await serverNodeV2Backup.getAddress(), value: ethAmount });
+      
+      // 创建提款提案
+      const amount = ethers.parseEther("100");
+      await serverNodeV2Backup.connect(signer1).createWithdrawProposal(amount, user1.address);
+      
+      // 确认提案
+      await serverNodeV2Backup.connect(signer1).confirmWithdrawProposal(0);
+      
+      // 查询确认状态
+      const isConfirmed = await serverNodeV2Backup.isProposalConfirmed(0, signer1.address);
+      expect(isConfirmed).to.be.true;
+      
+      // 查询未确认状态
+      const notConfirmed = await serverNodeV2Backup.isProposalConfirmed(0, signer2.address);
+      expect(notConfirmed).to.be.false;
+    });
+
+    // 8. 签名人数量查询测试
+    it("应该正确查询签名人数量", async function () {
+      // 查询初始签名人数量
+      const initialCount = await serverNodeV2Backup.getWithdrawSignerCount();
+      expect(initialCount).to.equal(3n);
+      
+      // 添加新签名人
+      await serverNodeV2Backup.connect(owner).addWithdrawSigner(user1.address);
+      
+      // 查询更新后的签名人数量
+      const updatedCount = await serverNodeV2Backup.getWithdrawSignerCount();
+      expect(updatedCount).to.equal(4n);
+    });
+  });
+
 });

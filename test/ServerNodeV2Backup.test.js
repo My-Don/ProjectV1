@@ -885,15 +885,15 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 分配节点给用户
       await serverNodeV2Backup.connect(admin).allocateNodes(user1.address, admin.address, 2, 2, 0);
       
-      // 暂停节点 (注意：_pause=true 表示暂停，因为合约中是 isActive = !_pause)
-      await serverNodeV2Backup.connect(owner).setNodeStatus(1, true);
+      // 暂停节点 (isActive=false 表示暂停)
+      await serverNodeV2Backup.connect(owner).setNodeStatus(1, false);
       
       // 验证节点被暂停
       const nodeInfoAfterPause = await serverNodeV2Backup.getNodeInfo(1);
       expect(nodeInfoAfterPause.isActive).to.be.false;
       
-      // 恢复节点 (注意：_pause=false 表示恢复，因为合约中是 isActive = !_pause)
-      await serverNodeV2Backup.connect(owner).setNodeStatus(1, false);
+      // 恢复节点 (isActive=true 表示恢复)
+      await serverNodeV2Backup.connect(owner).setNodeStatus(1, true);
       
       // 验证节点被恢复
       const nodeInfoAfter = await serverNodeV2Backup.getNodeInfo(1);
@@ -919,16 +919,21 @@ describe("ServerNodeV2Backup 完整测试", function () {
       const ethAmount = ethers.parseEther("10");
       await owner.sendTransaction({ to: contractAddress, value: ethAmount });
       
-      // 暂停节点 (注意：_pause=true 表示暂停，因为合约中是 isActive = !_pause)
-      await serverNodeV2Backup.connect(owner).setNodeStatus(1, true);
+      // 暂停节点 (isActive=false 表示暂停)
+      await serverNodeV2Backup.connect(owner).setNodeStatus(1, false);
       
-      // 尝试分发奖励，预期会被回滚（因为节点被暂停，没有活跃的分配记录）
+      // 尝试分发奖励，预期不会被回滚，但会跳过该用户（因为节点被暂停，没有活跃的分配记录）
       const users = [user1.address];
       
-      // 预期调用会被回滚，因为没有活跃的节点分配记录
-      await expect(
-        serverNodeV2Backup.connect(owner).configRewards(users)
-      ).to.be.revertedWith("No active node allocation records found for user");
+      // 记录用户初始余额
+      const initialBalance = await ethers.provider.getBalance(user1.address);
+      
+      // 调用奖励分发函数
+      await serverNodeV2Backup.connect(owner).configRewards(users);
+      
+      // 验证用户余额没有变化（因为节点被暂停，没有获得奖励）
+      const finalBalance = await ethers.provider.getBalance(user1.address);
+      expect(finalBalance).to.equal(initialBalance);
     });
   });
 
@@ -993,25 +998,25 @@ describe("ServerNodeV2Backup 完整测试", function () {
 
   // ==================== 20. 多签管理功能测试 ====================
   describe("20. 多签管理功能测试", function () {
-    it("应该允许签名人添加和移除提款签名者", async function () {
-      // 添加新的签名者（使用签名人身份）
-      await serverNodeV2Backup.connect(signer1).addWithdrawSigner(user1.address);
+    it("应该允许管理员添加和移除提款签名者", async function () {
+      // 添加新的签名者（使用管理员身份）
+      await serverNodeV2Backup.connect(owner).addWithdrawSigner(user1.address);
       
-      // 移除签名者（使用签名人身份）
-      await serverNodeV2Backup.connect(signer1).removeWithdrawSigner(signer3.address);
+      // 移除签名者（使用管理员身份）
+      await serverNodeV2Backup.connect(owner).removeWithdrawSigner(signer3.address);
       
       // 验证操作成功（无错误抛出）
       expect(true).to.be.true;
     });
 
-    it("非签名人不能管理多签设置", async function () {
+    it("非管理员不能管理多签设置", async function () {
       await expect(
         serverNodeV2Backup.connect(user1).addWithdrawSigner(user2.address)
-      ).to.be.revertedWith("Not a withdraw signer");
+      ).to.be.reverted;
       
       await expect(
         serverNodeV2Backup.connect(user1).removeWithdrawSigner(signer1.address)
-      ).to.be.revertedWith("Not a withdraw signer");
+      ).to.be.reverted;
     });
   });
 

@@ -106,7 +106,6 @@ contract SwapTrade is Ownable, ReentrancyGuard {
 
         uniswapV2Router = _uniswapV2Router;
 
-        // 从路由器获取工厂地址
         (bool success, bytes memory data) = uniswapV2Router.staticcall(
             abi.encodeWithSignature("factory()")
         );
@@ -127,7 +126,6 @@ contract SwapTrade is Ownable, ReentrancyGuard {
     function _approveIfNeeded(address token, uint256 amount) internal {
         if (token == address(0)) return;
 
-        // 检查当前授权是否足够
         uint256 allowance = IERC20(token).allowance(
             address(this),
             uniswapV2Router
@@ -305,7 +303,6 @@ contract SwapTrade is Ownable, ReentrancyGuard {
     ) internal returns (uint256 amountOut) {
         require(to != address(0), "zero address");
 
-        // 从用户地址转移代币到合约
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
 
         // 确保代币已授权给路由器
@@ -415,7 +412,6 @@ contract SwapTrade is Ownable, ReentrancyGuard {
             "zero address"
         );
 
-        // 从所有者地址转移代币到合约
         IERC20(p.tokenA).safeTransferFrom(owner(), address(this), p.amountA);
         IERC20(p.tokenB).safeTransferFrom(owner(), address(this), p.amountB);
 
@@ -559,6 +555,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
 
         // 遍历提取每个代币
         for (uint256 i = 0; i < tokens.length; i++) {
+            require(tokens[i] != address(0), "token is not zero address");
             uint256 balance = IERC20(tokens[i]).balanceOf(address(this));
             if (balance > 0) {
                 IERC20(tokens[i]).safeTransfer(to, balance);

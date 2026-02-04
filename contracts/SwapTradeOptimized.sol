@@ -471,7 +471,7 @@ contract SwapTradeOptimized is Ownable, ReentrancyGuard {
 
     /**
      * @dev 添加流动性
-     * @notice 支持自动退还剩余代币，带完整的安全检查
+     * @notice 支持自动退还剩余代币
      * @param p 添加流动性的参数
      */
     function addLiquidity(LiquidityParams memory p) external nonReentrant {
@@ -503,7 +503,7 @@ contract SwapTradeOptimized is Ownable, ReentrancyGuard {
             ? block.timestamp + defaultDeadlineSeconds
             : p.deadline;
 
-        // 调用路由器添加流动性
+        // 调用路由添加流动性
         (bool success, bytes memory returnData) = uniswapV2Router.call(
             abi.encodeWithSignature(
                 "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)",

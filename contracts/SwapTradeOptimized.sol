@@ -475,7 +475,6 @@ contract SwapTradeOptimized is Ownable, ReentrancyGuard {
      * @param p 添加流动性的参数
      */
     function addLiquidity(LiquidityParams memory p) external nonReentrant {
-        // 检查输入参数
         require(
             p.tokenA != address(0) && p.tokenB != address(0) && p.to != address(0),
             "zero address"
@@ -503,7 +502,7 @@ contract SwapTradeOptimized is Ownable, ReentrancyGuard {
             ? block.timestamp + defaultDeadlineSeconds
             : p.deadline;
 
-        // 调用路由添加流动性
+        // 调用路由器添加流动性
         (bool success, bytes memory returnData) = uniswapV2Router.call(
             abi.encodeWithSignature(
                 "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)",
@@ -639,7 +638,6 @@ contract SwapTradeOptimized is Ownable, ReentrancyGuard {
         to.transfer(balance);
     }
 
-    // 接收ETH的回调函数
     receive() external payable {}
 
     /**
@@ -647,8 +645,8 @@ contract SwapTradeOptimized is Ownable, ReentrancyGuard {
      * @param token 代币地址
      * @return 用户的代币余额
      */
-    function getAccountBalance(address token) external view returns(uint256) {
-        require(token != address(0), "zero address");
-        return IERC20(token).balanceOf(msg.sender);
+    function getAccountBalance(address token, address account) external view returns(uint256) {
+        require(token != address(0) && account != address(0), "zero address");
+        return IERC20(token).balanceOf(account);
     }
 }

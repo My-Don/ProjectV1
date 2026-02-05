@@ -85,7 +85,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
         uint256 timestamp               // 时间戳
     );
 
-    event Withdraw(address indexed token, address indexed to, uint256 amount);
+    event Withdraw(address indexed token, address indexed to, uint256 indexed amount);
 
     /**
      * @dev 构造函数

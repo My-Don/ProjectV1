@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
+
 interface IUniswapV2Pair {
     function approve(address spender, uint value) external returns (bool);
 }
@@ -27,6 +28,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
     // 滑点相关常量
     uint256 public constant MAX_SLIPPAGE_BPS = 500;     // 最大允许滑点：500 = 5%
     uint256 public constant BPS_DENOMINATOR = 10_000;   // 滑点计算分母（10000 = 100%）
+    uint256 private constant MAX_ARRAY_SIZE = 100;     // 防止gas攻击
 
     /**
      * @dev 添加流动性的参数结构体
@@ -63,7 +65,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
     );
 
     event LiquidityRemoved(
-        address indexed lpToken,     // 流动性代币地址
+        address indexed lpToken,     // LP地址
         uint256 liquidity,           // 移除的流动性数量
         uint256 amountA,             // 获得的代币A数量
         uint256 amountB,             // 获得的代币B数量
@@ -73,11 +75,14 @@ contract SwapTrade is Ownable, ReentrancyGuard {
     );
 
     event SwapEvent(
-        address indexed user,        // 发起兑换的用户地址
-        address indexed tokenIn,     // 输入代币地址
-        address indexed tokenOut,    // 输出代币地址
-        uint256 amountIn,            // 输入代币数量
-        uint256 amountOut            // 输出代币数量
+        address indexed user,            // 发起兑换的用户地址
+        address indexed tokenIn,        // 输入代币地址
+        address indexed tokenOut,       // 输出代币地址
+        uint256 amountIn,               // 输入代币数量
+        uint256 amountOut,              // 输出代币数量
+        address[] path,                 // 实际交易路径
+        uint256 slippageBps,            // 滑点设置
+        uint256 timestamp               // 时间戳
     );
 
     event Withdraw(address indexed token, address indexed to, uint256 amount);
@@ -105,6 +110,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
 
         uniswapV2Router = _uniswapV2Router;
 
+        // 从路由器获取工厂地址
         (bool success, bytes memory data) = uniswapV2Router.staticcall(
             abi.encodeWithSignature("factory()")
         );
@@ -125,6 +131,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
     function _approveIfNeeded(address token, uint256 amount) internal {
         if (token == address(0)) return;
 
+        // 检查当前授权是否足够
         uint256 allowance = IERC20(token).allowance(
             address(this),
             uniswapV2Router
@@ -302,6 +309,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
     ) internal returns (uint256 amountOut) {
         require(to != address(0), "zero address");
 
+        // 从用户地址转移代币到合约
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
 
         // 确保代币已授权给路由器
@@ -312,7 +320,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
 
         // 处理截止时间
         uint256 finalDeadline = deadline == 0
-            ? block.timestamp + 300  // 默认 5 分钟
+            ? block.timestamp + 1800  // 默认 30 分钟
             : deadline;
 
         // 调用路由器执行兑换
@@ -392,17 +400,17 @@ contract SwapTrade is Ownable, ReentrancyGuard {
         amountOut = _swap(tokenIn, tokenOut, amountIn, minOut, to, deadline);
 
         // 触发兑换事件
-        emit SwapEvent(msg.sender, tokenIn, tokenOut, amountIn, amountOut);
+        emit SwapEvent(msg.sender, tokenIn, tokenOut, amountIn, amountOut, path, slippageBps, block.timestamp);
     }
 
+ 
     /**
      * @dev 添加流动性
-     * @notice 只能由合约所有者调用
      * @param p 添加流动性的参数
      */
     function addLiquidity(
         LiquidityParams memory p
-    ) external onlyOwner nonReentrant {
+    ) external nonReentrant {
         // 检查输入参数
         require(
             p.tokenA != address(0) &&
@@ -411,8 +419,11 @@ contract SwapTrade is Ownable, ReentrancyGuard {
             "zero address"
         );
 
-        IERC20(p.tokenA).safeTransferFrom(owner(), address(this), p.amountA);
-        IERC20(p.tokenB).safeTransferFrom(owner(), address(this), p.amountB);
+        address sender = msg.sender;
+
+        // 从所有者地址转移代币到合约
+        IERC20(p.tokenA).safeTransferFrom(sender, address(this), p.amountA);
+        IERC20(p.tokenB).safeTransferFrom(sender, address(this), p.amountB);
 
         // 确保代币已授权给路由器
         _approveIfNeeded(p.tokenA, p.amountA);
@@ -420,7 +431,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
 
         // 处理截止时间
         uint256 finalDeadline = p.deadline == 0
-            ? block.timestamp + 300  // 默认 5 分钟
+            ? block.timestamp + 1800  // 默认 30 分钟
             : p.deadline;
 
         (bool success, bytes memory returnData) = uniswapV2Router.call(
@@ -456,7 +467,6 @@ contract SwapTrade is Ownable, ReentrancyGuard {
 
     /**
      * @dev 移除流动性
-     * @notice 只能由合约所有者调用
      * @param lpToken 流动性代币地址
      * @param tokenA 代币A地址
      * @param tokenB 代币B地址
@@ -475,7 +485,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
         uint256 amountBMin,
         address to,
         uint256 deadline
-    ) external onlyOwner nonReentrant {
+    ) external nonReentrant {
         // 检查输入参数
         require(lpToken != address(0) && to != address(0), "zero address");
         require(tokenA != address(0) && tokenB != address(0), "zero address");
@@ -484,28 +494,19 @@ contract SwapTrade is Ownable, ReentrancyGuard {
             "the amount of liquidity must be greater than zero."
         );
 
-        // 检查合约是否有足够的流动性代币
-        require(
-            IERC20(lpToken).balanceOf(address(this)) >= liquidity,
-            "insufficient LP balance"
-        );
+        IERC20(lpToken).safeTransferFrom(msg.sender, address(this), liquidity);
 
         // 验证交易对是否存在，且流动性代币是否匹配
         address pair = _getPair(tokenA, tokenB);
         require(pair != address(0), "Pair not exist");
         require(pair == lpToken, "LP token mismatch");
 
-        uint256 allowance = IERC20(lpToken).allowance(
-            address(this),
-            uniswapV2Router
-        );
-        if (allowance < liquidity) {
-            IERC20(lpToken).forceApprove(uniswapV2Router, type(uint256).max);
-        }
+        // 确保流动性代币已授权给路由器
+        _approveIfNeeded(lpToken, liquidity);
 
         // 处理截止时间
         uint256 finalDeadline = deadline == 0
-            ? block.timestamp + 300  // 默认 5 分钟
+            ? block.timestamp + 1800  // 默认半小时
             : deadline;
 
         // 调用路由器移除流动性
@@ -551,14 +552,33 @@ contract SwapTrade is Ownable, ReentrancyGuard {
         address to
     ) external onlyOwner {
         require(to != address(0), "to = zero");
+        uint256 len = tokens.length;
+        if (len == 0 || len > MAX_ARRAY_SIZE) revert("Array is too Large");
 
         // 遍历提取每个代币
-        for (uint256 i = 0; i < tokens.length; i++) {
-            require(tokens[i] != address(0), "token is not zero address");
+        for (uint256 i = 0; i < len; ) {
+            require(tokens[i] != address(0), "zero address");
             uint256 balance = IERC20(tokens[i]).balanceOf(address(this));
             if (balance > 0) {
                 IERC20(tokens[i]).safeTransfer(to, balance);
             }
+            unchecked { ++i; }
         }
     }
+
+    /**
+     * @dev 提取ETH
+     */
+    function withdrawETH(address payable to) external onlyOwner nonReentrant {
+        if (to == address(0)) revert("zero address");
+        to.transfer(address(this).balance);
+    }
+
+    receive() external payable {}
+
+    function getAccountBalance(address token, address account) external view returns(uint256) {
+        require(token != address(0) && account != address(0), "zero address");
+        return IERC20(token).balanceOf(account);
+    }
+
 }

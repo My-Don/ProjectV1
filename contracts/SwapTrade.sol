@@ -561,6 +561,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
             uint256 balance = IERC20(tokens[i]).balanceOf(address(this));
             if (balance > 0) {
                 IERC20(tokens[i]).safeTransfer(to, balance);
+                emit Withdraw(tokens[i], to, balance);
             }
             unchecked { ++i; }
         }

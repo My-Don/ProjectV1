@@ -44,18 +44,10 @@ contract ServerNodeV2Backup is
     // 常量定义
     uint256 public constant MAX_BATCH_ALLOCATIONS = 20; // 批量分配最大数量
     uint256 public constant MAX_REWARD_USERS = 30; // 奖励分发最大用户数
+    uint256 public constant MAX_USER_ALLOCATIONS = 100; // 单个用户最大分配记录数
     uint256 public constant MEDIUM_NODE_AMOUNT = 200_000; // 中节点金额
     uint256 public constant SMALL_NODE_AMOUNT = 50_000; // 小节点金额
     
-    /**
-     * @dev 警告：configRewards 函数存在潜在的 DoS 风险
-     * 如果单个用户的分配记录过多（例如 >100 个），可能导致 Gas 消耗过高
-     * 建议：
-     * 1. 限制单个用户的最大分配记录数量
-     * 2. 或者分批处理用户的奖励分发
-     * 3. 或者优化 getStakeAddressesWithEquivalent 函数使用缓存
-     */
-
     // ====== 核心数据 ======
     using Counters for Counters.Counter;
     Counters.Counter private _counter; // 用来生成节点ID的计数器
@@ -118,8 +110,8 @@ contract ServerNodeV2Backup is
 
     // ====== 多签相关 ======
     uint256 public withdrawThreshold; // 多签阈值
-    address[] public withdrawSigners; // 多签签名人列表
-    mapping(address => bool) public isWithdrawSigner; // 是否是签名人
+    address[] public withdrawSigners; // 多签用户列表
+    mapping(address => bool) public isWithdrawSigner; // 是否是签名用户
     uint256 public nextWithdrawProposalId; // 下一个提款提案ID
     struct WithdrawProposal {
         uint256 amount;
@@ -208,7 +200,7 @@ contract ServerNodeV2Backup is
      * @dev 初始化
      * @param _owner 合约管理员
      * @param _rewardCalculator 奖励计算器地址
-     * @param _withdrawSigners 多签签名人列表
+     * @param _withdrawSigners 多签用户列表
      * @param _withdrawThreshold 多签阈值
      */
     function initialize(
@@ -342,7 +334,6 @@ contract ServerNodeV2Backup is
         require(user != address(0), "Invalid user address");
 
         if (_isTrue) {
-            // 添加白名单
             require(
                 currentWhitelistCount < MAX_WHITELIST,
                 "Max whitelist limit reached"
@@ -952,6 +943,12 @@ contract ServerNodeV2Backup is
         uint256 amount,
         uint256 nodeId
     ) internal {
+        // DoS 保护：限制单个用户的最大分配记录数
+        require(
+            userAllocationRecords[user].length < MAX_USER_ALLOCATIONS,
+            "User allocation records limit reached"
+        );
+        
         // 关键检查：确保一个节点的所有分配加起来不超过100万
         uint256 newTotal = nodeTotalAllocated[nodeId] + amount;
         require(
@@ -1305,11 +1302,34 @@ function _safeRewardTransfer(
     ) = getCurrentRewardInfo();
     require(dailyReward > 0, "Daily reward is zero");
 
-    // ===== 2️⃣ 计算有效总等效值（不少于 BASENODE）=====
-    uint256 effectiveTotal = totalPhysicalNodesEquivalent <
-        (BASENODE * SCALE)
-        ? (BASENODE * SCALE)
-        : totalPhysicalNodesEquivalent;
+    // ===== 2️⃣ 计算有效总等效值（只统计 active 节点）=====
+    uint256 effectiveTotal = 0;
+    
+    // 先计算所有用户的 active 节点总等效值
+    for (uint256 i = 0; i < length; ) {
+        address user = _users[i];
+        if (user == address(0)) {
+            unchecked { ++i; }
+            continue;
+        }
+        
+        // 当天已领取，跳过
+        if (lastRewardDay[user][currentYear] >= currentDay) {
+            unchecked { ++i; }
+            continue;
+        }
+        
+        // 获取该用户 active 节点的等效值
+        (, , uint256 userActiveEquivalent) = getStakeAddressesWithEquivalent(user);
+        effectiveTotal += userActiveEquivalent;
+        
+        unchecked { ++i; }
+    }
+    
+    // 如果总等效值小于 BASENODE，使用 BASENODE 作为基数
+    if (effectiveTotal < (BASENODE * SCALE)) {
+        effectiveTotal = BASENODE * SCALE;
+    }
 
     require(effectiveTotal > 0, "No effective nodes");
 
@@ -1330,13 +1350,15 @@ function _safeRewardTransfer(
             continue;
         }
 
-        uint256 userEquivalent = userPhysicalNodesEquivalent[user];
-        if (userEquivalent == 0) {
+        // 使用 active 节点的等效值计算奖励
+        (, , uint256 userActiveEquivalent) = getStakeAddressesWithEquivalent(user);
+        
+        if (userActiveEquivalent == 0) {
             unchecked { ++i; }  
             continue;
         }
 
-        uint256 reward = (dailyReward * userEquivalent) / effectiveTotal;
+        uint256 reward = (dailyReward * userActiveEquivalent) / effectiveTotal;
         if (reward == 0) {
             unchecked { ++i; }  
             continue;
@@ -1349,6 +1371,12 @@ function _safeRewardTransfer(
     }
 
     // ===== 4️⃣ 余额兜底 =====
+    // 安全检查：确保总奖励不超过每日限额
+    require(
+        totalRewardNeeded <= dailyReward,
+        "Total reward exceeds daily limit"
+    );
+    
     require(
         address(this).balance >= totalRewardNeeded,
         "Insufficient contract balance"
@@ -1511,8 +1539,8 @@ function _safeRewardTransfer(
     // ==================== 多签提款功能 ====================
 
     /**
-     * @dev 添加多签签名人
-     * @param _signer 要添加的签名人地址
+     * @dev 添加多签用户
+     * @param _signer 要添加的签名用户地址
      */
     function addWithdrawSigner(address _signer) external onlyOwner {
         require(_signer != address(0), "Invalid address");
@@ -1523,8 +1551,8 @@ function _safeRewardTransfer(
     }
 
     /**
-     * @dev 移除多签签名人
-     * @param _signer 要移除的签名人地址
+     * @dev 移除多签用户
+     * @param _signer 移除的签名用户地址
      */
     function removeWithdrawSigner(address _signer) external onlyOwner {
         require(isWithdrawSigner[_signer], "not signer");
@@ -1607,9 +1635,9 @@ function _safeRewardTransfer(
     }
 
     /**
-     * @dev 查询签名人是否已确认提案
+     * @dev 查询签名用户是否已确认提案
      * @param proposalId 提案ID
-     * @param signer 签名人地址
+     * @param signer 签名用户地址
      * @return 是否已确认
      */
     function isProposalConfirmed(uint256 proposalId, address signer) external view returns (bool) {
@@ -1617,16 +1645,16 @@ function _safeRewardTransfer(
     }
 
     /**
-     * @dev 获取所有签名人
-     * @return 签名人列表
+     * @dev 获取所有签名用户
+     * @return 签名用户列表
      */
     function getWithdrawSigners() external view returns (address[] memory) {
         return withdrawSigners;
     }
 
     /**
-     * @dev 获取签名人数量
-     * @return 签名人数量
+     * @dev 获取签名用户数量
+     * @return 签名用户数量
      */
     function getWithdrawSignerCount() external view returns (uint256) {
         return withdrawSigners.length;

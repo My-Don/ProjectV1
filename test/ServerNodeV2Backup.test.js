@@ -432,7 +432,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
 
       await expect(
         serverNodeV2Backup.connect(admin).allocateNodesBatch(allocations)
-      ).to.be.revertedWith("Max 20 allocations per batch");
+      ).to.be.revertedWith("Invalid batch size");
     });
   });
 

@@ -572,7 +572,7 @@ contract SwapTrade is Ownable, ReentrancyGuard {
      */
     function withdrawETH(address payable to) external onlyOwner nonReentrant {
         if (to == address(0)) revert("zero address");
-        to.transfer(address(this).balance);
+        if (address(this).balance > 0) to.transfer(address(this).balance);    
     }
 
     receive() external payable {}

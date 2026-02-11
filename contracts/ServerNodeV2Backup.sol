@@ -40,6 +40,12 @@ contract ServerNodeV2Backup is
     uint256 public constant DEFAULT_CAPACITY = 1_000_000; // 每个节点100万容量
     uint256 public constant SECONDS_PER_DAY = 86400; // 一天多少秒
     uint256 private constant SCALE = 1e6; // 精度放大倍数，用来算等效值
+    
+    // 常量定义
+    uint256 public constant MAX_BATCH_ALLOCATIONS = 20; // 批量分配最大数量
+    uint256 public constant MAX_REWARD_USERS = 30; // 奖励分发最大用户数
+    uint256 public constant MEDIUM_NODE_AMOUNT = 200_000; // 中节点金额
+    uint256 public constant SMALL_NODE_AMOUNT = 50_000; // 小节点金额
 
     // ====== 核心数据 ======
     using Counters for Counters.Counter;
@@ -259,7 +265,6 @@ contract ServerNodeV2Backup is
 
             // 2. 所有节点容量固定为100万
             uint256 capacity = DEFAULT_CAPACITY;
-            bool  isActive = true;
 
             // 生成新的节点ID
             _counter.increment();
@@ -270,7 +275,7 @@ contract ServerNodeV2Backup is
                 NodeInfo({
                     ip: _nodeInfo[i].ip,
                     name: _nodeInfo[i].name,
-                    isActive: isActive,
+                    isActive: _nodeInfo[i].isActive,
                     nodeStakeAddress: _nodeInfo[i].nodeStakeAddress,
                     id: newId,
                     createTime: _nodeInfo[i].createTime == 0
@@ -292,7 +297,7 @@ contract ServerNodeV2Backup is
             emit CreateNodeInfo(
                 _nodeInfo[i].ip,
                 _nodeInfo[i].name,
-                isActive,
+                _nodeInfo[i].isActive,
                 _nodeInfo[i].nodeStakeAddress,
                 newId,
                 capacity
@@ -321,11 +326,9 @@ contract ServerNodeV2Backup is
             whiteList[user] = true;
             currentWhitelistCount++;
         } else {
-            // 移除白名单
-            if (whiteList[user]) {
-                whiteList[user] = false;
-                currentWhitelistCount--;
-            }
+            require(whiteList[user], "User not in whitelist");
+            whiteList[user] = false;
+            currentWhitelistCount--;
         }
         emit WhitelistUpdated(user, _isTrue);
     }
@@ -339,10 +342,10 @@ contract ServerNodeV2Backup is
         Allocation[] calldata allocations
     ) external onlyAllocationAuthorized whenAllocationNotPaused nonReentrant {
         uint256 length = allocations.length;
-        require(length <= 20, "Max 20 allocations per batch");
+        require(length > 0 && length <= MAX_BATCH_ALLOCATIONS, "Invalid batch size");
 
         // 逐个处理每个分配请求
-        for (uint i = 0; i < length; i++) {
+        for (uint i = 0; i < length; ) {
             _processAllocation(
                 allocations[i].user,
                 allocations[i].stakeAddress,
@@ -350,6 +353,7 @@ contract ServerNodeV2Backup is
                 allocations[i].quantity,
                 allocations[i].amount
             );
+            unchecked { ++i; }  
         }
     }
 
@@ -428,12 +432,12 @@ contract ServerNodeV2Backup is
         );
         nodeTotalAllocated[nodeId] -= amount;
 
-        // 如果是大节点且分配金额为100万，重置大节点标记
-        if (nodeType == 1 && amount == DEFAULT_CAPACITY) {
+        // 如果节点分配金额归零，重置大节点标记
+        if (nodeTotalAllocated[nodeId] == 0) {
             isNodeAllocatedAsBig[nodeId] = false;
         }
 
-        /* ====== ✅ 等效值回滚（关键修复） ====== */
+        /* ====== ✅ 等效值回滚 */
         uint256 equivalent = (amount * SCALE) / DEFAULT_CAPACITY;
         userPhysicalNodesEquivalent[user] -= equivalent;
         totalPhysicalNodesEquivalent -= equivalent;
@@ -480,15 +484,17 @@ contract ServerNodeV2Backup is
         );
         require(nodeType >= 1 && nodeType <= 4, "Invalid node type");
 
+        uint256 totalAmount;
+
         if (nodeType == 4) {
             // 商品分配：金额1-100万，数量必须为0
             require(
-                amount >= 1 && amount <= 1_000_000,
+                amount >= 1 && amount <= DEFAULT_CAPACITY,
                 "Amount must be 1-1,000,000"
             );
             require(quantity == 0, "Quantity must be 0 for commodity");
-            _allocateCommodity(user, stakeAddress, amount); // 分配商品
-            _updateEquivalentValue(user, amount); // 更新等效值
+            _allocateCommodity(user, stakeAddress, amount);
+            totalAmount = amount;
         } else {
             // 大/中/小节点：数量必须大于0，金额必须为0
             require(quantity > 0, "Quantity must be > 0");
@@ -497,18 +503,20 @@ contract ServerNodeV2Backup is
             if (nodeType == 1) {
                 // 大节点：整机独占100万
                 _allocateBigNodes(user, stakeAddress, quantity);
+                totalAmount = quantity * DEFAULT_CAPACITY;
             } else if (nodeType == 2) {
                 // 中节点：每个20万
-                uint256 totalAmount = quantity * 200_000;
                 _allocateMediumNodes(user, stakeAddress, quantity);
-                _updateEquivalentValue(user, totalAmount);
+                totalAmount = quantity * MEDIUM_NODE_AMOUNT;
             } else if (nodeType == 3) {
                 // 小节点：每个5万
-                uint256 totalAmount = quantity * 50_000;
                 _allocateSmallNodes(user, stakeAddress, quantity);
-                _updateEquivalentValue(user, totalAmount);
+                totalAmount = quantity * SMALL_NODE_AMOUNT;
             }
         }
+        
+        // 更新等效值
+        _updateEquivalentValue(user, totalAmount);
     }
 
     // ==================== 核心分配逻辑 ====================
@@ -526,18 +534,20 @@ contract ServerNodeV2Backup is
         uint256 quantity
     ) internal {
         uint256 allocated = 0; // 已分配的数量
-        for (uint i = 0; i < deployNode.length && allocated < quantity; i++) {
-            //uint256 nodeId = deployNode[i].id;
-             NodeInfo storage node = deployNode[i];
-             uint256 nodeId = node.id;
+        uint256 nodeCount = deployNode.length;  
+        
+        for (uint i = 0; i < nodeCount && allocated < quantity; ) {
+            NodeInfo storage node = deployNode[i];
+            uint256 nodeId = node.id;
           
-            // 节点必须处于活动状态
-            // 1️⃣ 防止 nodeId / index 错位（这是你问题的根因之一）
+            // 1️⃣ 防止 nodeId / index 错位
             if (nodeIndexById[nodeId] != i) {
+                unchecked { ++i; }
                 continue;
             }
-            // 2️⃣ 节点必须处于 active 状态（确保 setNodeStatus 生效）
+            // 2️⃣ 节点必须处于 active 状态
             if (!node.isActive) {
+                unchecked { ++i; }
                 continue;
             }
 
@@ -546,7 +556,7 @@ contract ServerNodeV2Backup is
                 !isNodeAllocatedAsBig[nodeId] && // 没被分配过大节点
                 nodeTotalAllocated[nodeId] == 0 // 没分配过任何金额
             ) {
-                // 标记为大节点（不能在这里设置nodeTotalAllocated，_recordAllocation会处理）
+                // 标记为大节点
                 isNodeAllocatedAsBig[nodeId] = true;
 
                 // 记录分配（内部会更新nodeTotalAllocated）
@@ -558,11 +568,10 @@ contract ServerNodeV2Backup is
                     nodeId
                 );
 
-                // 更新等效值
-                _updateEquivalentValue(user, DEFAULT_CAPACITY);
-
-                allocated++; // 已分配数量加1
+                unchecked { ++allocated; }  
             }
+            
+            unchecked { ++i; }  
         }
         require(allocated == quantity, "Insufficient available big nodes");
     }
@@ -580,46 +589,57 @@ contract ServerNodeV2Backup is
         uint256 quantity
     ) internal {
         uint256 remaining = quantity; // 还需要分配的数量
-        uint256 requiredCapacity = 200_000; // 每个中节点需要20万容量
+        uint256 nodeCount = deployNode.length;  
 
         // 遍历所有节点
-        for (uint i = 0; i < deployNode.length && remaining > 0; i++) {
+        for (uint i = 0; i < nodeCount && remaining > 0; ) {
             uint256 nodeId = deployNode[i].id;
 
             // 跳过已被分配为大节点的节点
-            if (isNodeAllocatedAsBig[nodeId]) continue;
+            if (isNodeAllocatedAsBig[nodeId]) {
+                unchecked { ++i; }
+                continue;
+            }
             
             // 跳过非活动节点
-            if (nodeIndexById[nodeId] != i) continue;
-            if (!deployNode[i].isActive) continue;
-
+            if (nodeIndexById[nodeId] != i) {
+                unchecked { ++i; }
+                continue;
+            }
+            if (!deployNode[i].isActive) {
+                unchecked { ++i; }
+                continue;
+            }
 
             // 计算节点剩余容量
             uint256 allocated = nodeTotalAllocated[nodeId];
             uint256 available = DEFAULT_CAPACITY - allocated;
 
             // 如果节点剩余容量≥20万，可以分配中节点
-            if (available >= requiredCapacity) {
+            if (available >= MEDIUM_NODE_AMOUNT) {
                 // 计算这个节点最多能分配几个中节点
-                uint256 maxFromThisNode = available / requiredCapacity;
+                uint256 maxFromThisNode = available / MEDIUM_NODE_AMOUNT;
                 // 实际分配数量 = min(还需要分配的数量, 这个节点能分配的最大数量)
                 uint256 allocateCount = remaining > maxFromThisNode
                     ? maxFromThisNode
                     : remaining;
 
                 // 为每个中节点创建一条分配记录
-                for (uint j = 0; j < allocateCount; j++) {
+                for (uint j = 0; j < allocateCount; ) {
                     _recordAllocation(
                         user,
                         stakeAddress,
                         2,
-                        requiredCapacity,
+                        MEDIUM_NODE_AMOUNT,
                         nodeId
                     );
+                    unchecked { ++j; }  
                 }
 
                 remaining -= allocateCount; // 减少还需要分配的数量
             }
+            
+            unchecked { ++i; }  
         }
         require(remaining == 0, "Insufficient capacity for medium nodes");
     }
@@ -637,37 +657,49 @@ contract ServerNodeV2Backup is
         uint256 quantity
     ) internal {
         uint256 remaining = quantity;
-        uint256 requiredCapacity = 50_000; // 每个小节点需要5万容量
+        uint256 nodeCount = deployNode.length;  
 
-        for (uint i = 0; i < deployNode.length && remaining > 0; i++) {
+        for (uint i = 0; i < nodeCount && remaining > 0; ) {
             uint256 nodeId = deployNode[i].id;
-            if (isNodeAllocatedAsBig[nodeId]) continue;
+            if (isNodeAllocatedAsBig[nodeId]) {
+                unchecked { ++i; }
+                continue;
+            }
             
             // 跳过非活动节点
-            if (nodeIndexById[nodeId] != i) continue;
-            if (!deployNode[i].isActive) continue;
+            if (nodeIndexById[nodeId] != i) {
+                unchecked { ++i; }
+                continue;
+            }
+            if (!deployNode[i].isActive) {
+                unchecked { ++i; }
+                continue;
+            }
 
             uint256 allocated = nodeTotalAllocated[nodeId];
             uint256 available = DEFAULT_CAPACITY - allocated;
 
-            if (available >= requiredCapacity) {
-                uint256 maxFromThisNode = available / requiredCapacity;
+            if (available >= SMALL_NODE_AMOUNT) {
+                uint256 maxFromThisNode = available / SMALL_NODE_AMOUNT;
                 uint256 allocateCount = remaining > maxFromThisNode
                     ? maxFromThisNode
                     : remaining;
 
-                for (uint j = 0; j < allocateCount; j++) {
+                for (uint j = 0; j < allocateCount; ) {
                     _recordAllocation(
                         user,
                         stakeAddress,
                         3,
-                        requiredCapacity,
+                        SMALL_NODE_AMOUNT,
                         nodeId
                     );
+                    unchecked { ++j; }  
                 }
 
                 remaining -= allocateCount;
             }
+            
+            unchecked { ++i; }  
         }
         require(remaining == 0, "Insufficient capacity for small nodes");
     }
@@ -685,19 +717,32 @@ contract ServerNodeV2Backup is
         uint256 amount
     ) internal {
         uint256 remaining = amount; // 还需要分配的金额
+        uint256 nodeCount = deployNode.length;  
 
-        for (uint i = 0; i < deployNode.length && remaining > 0; i++) {
+        for (uint i = 0; i < nodeCount && remaining > 0; ) {
             uint256 nodeId = deployNode[i].id;
-            if (isNodeAllocatedAsBig[nodeId]) continue;
+            if (isNodeAllocatedAsBig[nodeId]) {
+                unchecked { ++i; }
+                continue;
+            }
             
             // 跳过非活动节点
-            if (nodeIndexById[nodeId] != i) continue;
-            if (!deployNode[i].isActive) continue;
+            if (nodeIndexById[nodeId] != i) {
+                unchecked { ++i; }
+                continue;
+            }
+            if (!deployNode[i].isActive) {
+                unchecked { ++i; }
+                continue;
+            }
 
             uint256 allocated = nodeTotalAllocated[nodeId];
             uint256 available = DEFAULT_CAPACITY - allocated;
 
-            if (available == 0) continue; // 节点已满，跳过
+            if (available == 0) {
+                unchecked { ++i; }
+                continue; // 节点已满，跳过
+            }
 
             // 这次从这个节点分配多少
             uint256 toAllocate = remaining > available ? available : remaining;
@@ -706,6 +751,8 @@ contract ServerNodeV2Backup is
             _recordAllocation(user, stakeAddress, 4, toAllocate, nodeId);
 
             remaining -= toAllocate; // 减少还需要分配的金额
+            
+            unchecked { ++i; }  
         }
         require(remaining == 0, "Insufficient capacity for commodity");
     }
@@ -742,15 +789,13 @@ contract ServerNodeV2Backup is
         );
 
         // 计算总金额：中节点×20万 + 小节点×5万 + 商品金额
-        uint256 totalAmount = uint256(combination.mediumNodes) *
-            200_000 +
-            uint256(combination.smallNodes) *
-            50_000 +
+        uint256 totalAmount = uint256(combination.mediumNodes) * MEDIUM_NODE_AMOUNT +
+            uint256(combination.smallNodes) * SMALL_NODE_AMOUNT +
             combination.commodity;
 
         // 总金额必须在1到100万之间
         require(
-            totalAmount > 0 && totalAmount <= 1_000_000,
+            totalAmount > 0 && totalAmount <= DEFAULT_CAPACITY,
             "Total must be 1~1,000,000"
         );
 
@@ -791,15 +836,25 @@ contract ServerNodeV2Backup is
     ) internal {
         uint256 targetNodeId = 0; // 目标节点ID
         bool found = false; // 是否找到合适节点
+        uint256 nodeCount = deployNode.length;  
 
         // 1. 寻找有足够容量的节点
-        for (uint256 i = 0; i < deployNode.length; i++) {
+        for (uint256 i = 0; i < nodeCount; ) {
             uint256 nodeId = deployNode[i].id;
-            if (isNodeAllocatedAsBig[nodeId]) continue; // 跳过已分配为大节点的
+            if (isNodeAllocatedAsBig[nodeId]) {
+                unchecked { ++i; }
+                continue; // 跳过已分配为大节点的
+            }
             
             // 跳过非活动节点
-            if (nodeIndexById[nodeId] != i) continue;
-            if (!deployNode[i].isActive) continue;
+            if (nodeIndexById[nodeId] != i) {
+                unchecked { ++i; }
+                continue;
+            }
+            if (!deployNode[i].isActive) {
+                unchecked { ++i; }
+                continue;
+            }
 
             // 计算节点剩余容量
             uint256 allocated = nodeTotalAllocated[nodeId];
@@ -811,6 +866,8 @@ contract ServerNodeV2Backup is
                 found = true;
                 break;
             }
+            
+            unchecked { ++i; }  
         }
 
         // 必须找到有足够容量的节点
@@ -822,15 +879,17 @@ contract ServerNodeV2Backup is
         // 2. 在找到的节点内依次分配
         // 分配中节点（每个20万）
         if (combination.mediumNodes > 0) {
-            for (uint8 i = 0; i < combination.mediumNodes; i++) {
-                _recordAllocation(user, stakeAddress, 2, 200_000, targetNodeId);
+            for (uint8 i = 0; i < combination.mediumNodes; ) {
+                _recordAllocation(user, stakeAddress, 2, MEDIUM_NODE_AMOUNT, targetNodeId);
+                unchecked { ++i; }  
             }
         }
 
         // 分配小节点（每个5万）
         if (combination.smallNodes > 0) {
-            for (uint8 i = 0; i < combination.smallNodes; i++) {
-                _recordAllocation(user, stakeAddress, 3, 50_000, targetNodeId);
+            for (uint8 i = 0; i < combination.smallNodes; ) {
+                _recordAllocation(user, stakeAddress, 3, SMALL_NODE_AMOUNT, targetNodeId);
+                unchecked { ++i; }  
             }
         }
 
@@ -1107,7 +1166,7 @@ contract ServerNodeV2Backup is
         if (nodeIndex >= deployNode.length) continue;
         if (deployNode[nodeIndex].id != nodeId) continue;
 
-        // ✅ 关键：只统计 active 节点
+        // 统计 active 节点
         if (!deployNode[nodeIndex].isActive) continue;
 
         uint256 equivalent = (record.amount * SCALE) / DEFAULT_CAPACITY;
@@ -1165,10 +1224,10 @@ function _safeRewardTransfer(
 
     /**
      * @dev 分发奖励给用户（只有管理员能调用）
-     * @param _users 用户地址数组（最多30个）
+     * @param _users 用户地址数组（最多50个）
      * 规则：1.每人每天只能领一次 2.奖励按等效值比例分配 3.50%给用户，50%给质押地址
      */
-function configRewards(
+     function configRewards(
     address[] calldata _users
 )
     external
@@ -1178,7 +1237,7 @@ function configRewards(
     whenNodeAllocationRewardNotPaused
 {
     uint256 length = _users.length;
-    require(length > 0 && length <= 30, "Invalid users count");
+    require(length > 0 && length <= MAX_REWARD_USERS, "Invalid users count");
 
     // ===== 1️⃣ 获取今日奖励信息 =====
     (
@@ -1200,21 +1259,35 @@ function configRewards(
     uint256[] memory userRewards = new uint256[](length);
     uint256 totalRewardNeeded = 0;
 
-    for (uint256 i = 0; i < length; i++) {
+    for (uint256 i = 0; i < length; ) {
         address user = _users[i];
-        if (user == address(0)) continue;
+        if (user == address(0)) {
+            unchecked { ++i; }  
+            continue;
+        }
 
         // 当天已领取，跳过
-        if (lastRewardDay[user][currentYear] >= currentDay) continue;
+        if (lastRewardDay[user][currentYear] >= currentDay) {
+            unchecked { ++i; }  
+            continue;
+        }
 
         uint256 userEquivalent = userPhysicalNodesEquivalent[user];
-        if (userEquivalent == 0) continue;
+        if (userEquivalent == 0) {
+            unchecked { ++i; }  
+            continue;
+        }
 
         uint256 reward = (dailyReward * userEquivalent) / effectiveTotal;
-        if (reward == 0) continue;
+        if (reward == 0) {
+            unchecked { ++i; }  
+            continue;
+        }
 
         userRewards[i] = reward;
         totalRewardNeeded += reward;
+        
+        unchecked { ++i; }  
     }
 
     // ===== 4️⃣ 余额兜底 =====
@@ -1227,14 +1300,20 @@ function configRewards(
     uint256 usersProcessed = 0;
     uint256 totalDistributed = 0;
 
-    for (uint256 i = 0; i < length; i++) {
+    for (uint256 i = 0; i < length; ) {
         uint256 totalReward = userRewards[i];
-        if (totalReward == 0) continue;
+        if (totalReward == 0) {
+            unchecked { ++i; }  
+            continue;
+        }
 
         address user = _users[i];
 
         // 再次防御：防止同批次重复
-        if (lastRewardDay[user][currentYear] >= currentDay) continue;
+        if (lastRewardDay[user][currentYear] >= currentDay) {
+            unchecked { ++i; }  
+            continue;
+        }
 
         /**
          * 只从「仍然 active 的节点」统计质押等效值
@@ -1246,7 +1325,10 @@ function configRewards(
         ) = getStakeAddressesWithEquivalent(user);
 
         // 若没有任何 active 节点参与，直接跳过
-        if (totalStakeEquivalent == 0) continue;
+        if (totalStakeEquivalent == 0) {
+            unchecked { ++i; }  
+            continue;
+        }
 
         // ===== 奖励拆分：50% 用户 + 50% 质押 =====
         uint256 userReward = totalReward / 2;
@@ -1256,12 +1338,19 @@ function configRewards(
         _safeRewardTransfer(user, userReward);
 
         // ---- 给质押地址（按等效值比例）----
-        for (uint256 j = 0; j < stakeAddresses.length; j++) {
+        uint256 stakeLength = stakeAddresses.length;  
+        for (uint256 j = 0; j < stakeLength; ) {
             address stakeAddr = stakeAddresses[j];
-            if (stakeAddr == address(0)) continue;
+            if (stakeAddr == address(0)) {
+                unchecked { ++j; }  
+                continue;
+            }
 
             uint256 stakeReward = (stakeRewardPool * equivalents[j]) / totalStakeEquivalent;
-            if (stakeReward == 0) continue;
+            if (stakeReward == 0) {
+                unchecked { ++j; }  
+                continue;
+            }
 
             _safeRewardTransfer(stakeAddr, stakeReward);
 
@@ -1271,12 +1360,17 @@ function configRewards(
                 stakeReward,
                 currentYear
             );
+            
+            unchecked { ++j; }  
         }
 
         // ===== 记录已领取 =====
         lastRewardDay[user][currentYear] = currentDay;
 
-        usersProcessed++;
+        unchecked { 
+            ++usersProcessed;
+            ++i;  
+        }
         totalDistributed += totalReward;
 
         emit RewardDistributed(

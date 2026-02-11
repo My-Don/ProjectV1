@@ -2,7 +2,7 @@
 /**
  * 提取所有 standard_json 文件到 json/ 目录
  * 为每个合约生成只包含其依赖源文件的 standard_json
- * 使用方法: node scripts/gen.js
+ * 使用方法: node scripts/generate_json.js
  */
 
 const fs = require('fs');
@@ -214,3 +214,4 @@ function main() {
 
 // 执行主函数
 main();
+

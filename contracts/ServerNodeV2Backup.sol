@@ -46,6 +46,15 @@ contract ServerNodeV2Backup is
     uint256 public constant MAX_REWARD_USERS = 30; // 奖励分发最大用户数
     uint256 public constant MEDIUM_NODE_AMOUNT = 200_000; // 中节点金额
     uint256 public constant SMALL_NODE_AMOUNT = 50_000; // 小节点金额
+    
+    /**
+     * @dev 警告：configRewards 函数存在潜在的 DoS 风险
+     * 如果单个用户的分配记录过多（例如 >100 个），可能导致 Gas 消耗过高
+     * 建议：
+     * 1. 限制单个用户的最大分配记录数量
+     * 2. 或者分批处理用户的奖励分发
+     * 3. 或者优化 getStakeAddressesWithEquivalent 函数使用缓存
+     */
 
     // ====== 核心数据 ======
     using Counters for Counters.Counter;
@@ -152,7 +161,7 @@ contract ServerNodeV2Backup is
         _;
     }
 
-    // 只有多签签名人才能调用
+    // 只有多签用户才能调用
     modifier onlyWithdrawMultiSig() {
         require(isWithdrawSigner[msg.sender], "Not a withdraw signer");
         _;
@@ -177,8 +186,8 @@ contract ServerNodeV2Backup is
         uint8 smallNodes,
         uint256 commodity
     );
-    event NodeAllocated(address indexed user, address indexed stakeAddress, uint8 nodeType, uint256 amount, uint256 nodeId);
-    event NodeDeallocated(address indexed user, address indexed stakeAddress, uint8 nodeType, uint256 amount, uint256 nodeId);
+    event NodeAllocated(address indexed user, address indexed stakeAddress, uint8 nodeType, uint256 amount, uint256 indexed nodeId);
+    event NodeDeallocated(address indexed user, address indexed stakeAddress, uint8 nodeType, uint256 amount, uint256 indexed nodeId);
     event StakeRewardDistributed(address indexed user, address indexed stakeAddress, uint256 amount, uint16 year);
     event RewardDistributed(address indexed user, uint256 amount, uint16 year);
     event BatchRewardsDistributed(uint256 count, uint256 totalAmount, uint16 year);
@@ -222,16 +231,16 @@ contract ServerNodeV2Backup is
         require(_withdrawThreshold > 0, "Threshold must be greater than 0");
         require(_withdrawThreshold <= length, "Threshold exceeds signers count");
 
-        // 设置奖励计算器
         REWARD = _rewardCalculator;
 
-        // 初始化多签系统
-        for (uint i = 0; i < length; i++) {
+        // 初始化多签
+        for (uint i = 0; i < length; ) {
             require(_withdrawSigners[i] != address(0), "Invalid signer address");
             require(!isWithdrawSigner[_withdrawSigners[i]], "Signer already exists");
             withdrawSigners.push(_withdrawSigners[i]);
             isWithdrawSigner[_withdrawSigners[i]] = true;
             emit WithdrawSignerAdded(_withdrawSigners[i]);
+            unchecked { ++i; }
         }
 
         withdrawThreshold = _withdrawThreshold;
@@ -254,7 +263,21 @@ contract ServerNodeV2Backup is
             "Exceeds max physical nodes (2000)"
         );
 
-        for (uint256 i = 0; i < length; i++) {
+        // 检查批次内的 IP 唯一性
+        if (length > 1) {
+            for (uint256 i = 0; i < length; ) {
+                for (uint256 j = i + 1; j < length; ) {
+                    require(
+                        keccak256(bytes(_nodeInfo[i].ip)) != keccak256(bytes(_nodeInfo[j].ip)),
+                        "Duplicate IP in batch"
+                    );
+                    unchecked { ++j; }
+                }
+                unchecked { ++i; }
+            }
+        }
+
+        for (uint256 i = 0; i < length; ) {
             // 1. 检查IP地址是否唯一
             require(nodeIdByIP[_nodeInfo[i].ip] == 0, "IP address must be unique");
 
@@ -302,6 +325,8 @@ contract ServerNodeV2Backup is
                 newId,
                 capacity
             );
+            
+            unchecked { ++i; }
         }
     }
 
@@ -372,7 +397,7 @@ contract ServerNodeV2Backup is
         uint8 nodeType,
         uint256 amount,
         uint256 nodeId
-    ) external onlyOwner whenNotPaused {
+    ) external onlyOwner nonReentrant whenNotPaused {
         // 检查参数
         require(user != address(0), "Invalid user");
         require(stakeAddress != address(0), "Invalid stake address");
@@ -388,7 +413,8 @@ contract ServerNodeV2Backup is
         // 从用户分配记录中移除
         AllocationRecord[] storage userRecords = userAllocationRecords[user];
         bool found = false;
-        for (uint i = 0; i < userRecords.length; i++) {
+        uint256 userRecordsLength = userRecords.length;
+        for (uint i = 0; i < userRecordsLength; ) {
             AllocationRecord storage record = userRecords[i];
             if (
                 record.stakeAddress == stakeAddress &&
@@ -402,13 +428,15 @@ contract ServerNodeV2Backup is
                 found = true;
                 break;
             }
+            unchecked { ++i; }
         }
         require(found, "Allocation record not found for user");
 
         // 从节点分配记录中移除
         AllocationRecord[] storage nodeRecords = nodeAllocationRecords[nodeId];
         bool nodeRecordFound = false;
-        for (uint i = 0; i < nodeRecords.length; i++) {
+        uint256 nodeRecordsLength = nodeRecords.length;
+        for (uint i = 0; i < nodeRecordsLength; ) {
             AllocationRecord storage record = nodeRecords[i];
             if (
                 record.user == user &&
@@ -422,6 +450,7 @@ contract ServerNodeV2Backup is
                 nodeRecordFound = true;
                 break;
             }
+            unchecked { ++i; }
         }
         require(nodeRecordFound, "Allocation record not found for node");
 
@@ -437,7 +466,7 @@ contract ServerNodeV2Backup is
             isNodeAllocatedAsBig[nodeId] = false;
         }
 
-        /* ====== ✅ 等效值回滚 */
+        /* 等效值回滚 */
         uint256 equivalent = (amount * SCALE) / DEFAULT_CAPACITY;
         userPhysicalNodesEquivalent[user] -= equivalent;
         totalPhysicalNodesEquivalent -= equivalent;
@@ -771,7 +800,7 @@ contract ServerNodeV2Backup is
         address user,
         address stakeAddress,
         NodeCombination calldata combination
-    ) external onlyAllocationAuthorized whenAllocationNotPaused {
+    ) external nonReentrant onlyAllocationAuthorized whenAllocationNotPaused {
         // 检查参数
         require(
             user != address(0) && stakeAddress != address(0),
@@ -1092,13 +1121,26 @@ contract ServerNodeV2Backup is
     {
         totalNodes = deployNode.length;
 
-        // 遍历所有节点计算统计
-        for (uint i = 0; i < totalNodes; i++) {
+        for (uint i = 0; i < totalNodes; ) {
             NodeInfo storage node = deployNode[i];
-            if (nodeIndexById[node.id] != i) continue;
-            if (node.isActive) activeNodes++;
-            if (isNodeAllocatedAsBig[node.id]) bigNodes++;
-            else totalRemainingCapacity += getNodeRemainingCapacity(node.id);
+            
+            if (nodeIndexById[node.id] != i) {
+                unchecked { ++i; }
+                continue;
+            }
+            
+            if (node.isActive) {
+                unchecked { ++activeNodes; }
+            }
+            
+            if (isNodeAllocatedAsBig[node.id]) {
+                unchecked { ++bigNodes; }
+            } else {
+                uint256 remaining = DEFAULT_CAPACITY - nodeTotalAllocated[node.id];
+                totalRemainingCapacity += remaining;
+            }
+            
+            unchecked { ++i; }
         }
 
         return (totalNodes, activeNodes, bigNodes, totalRemainingCapacity);
@@ -1158,44 +1200,60 @@ contract ServerNodeV2Backup is
     uint256 uniqueCount = 0;
     uint256 totalStakeEquivalent = 0;
 
-    for (uint256 i = 0; i < len; i++) {
+    for (uint256 i = 0; i < len; ) {
         AllocationRecord storage record = records[i];
         uint256 nodeId = record.nodeId;
 
         uint256 nodeIndex = nodeIndexById[nodeId];
-        if (nodeIndex >= deployNode.length) continue;
-        if (deployNode[nodeIndex].id != nodeId) continue;
+        if (nodeIndex >= deployNode.length) {
+            unchecked { ++i; }
+            continue;
+        }
+        if (deployNode[nodeIndex].id != nodeId) {
+            unchecked { ++i; }
+            continue;
+        }
 
         // 统计 active 节点
-        if (!deployNode[nodeIndex].isActive) continue;
+        if (!deployNode[nodeIndex].isActive) {
+            unchecked { ++i; }
+            continue;
+        }
 
         uint256 equivalent = (record.amount * SCALE) / DEFAULT_CAPACITY;
-        if (equivalent == 0) continue;
+        if (equivalent == 0) {
+            unchecked { ++i; }
+            continue;
+        }
 
         totalStakeEquivalent += equivalent;
 
         bool found = false;
-        for (uint256 j = 0; j < uniqueCount; j++) {
+        for (uint256 j = 0; j < uniqueCount; ) {
             if (tempAddresses[j] == record.stakeAddress) {
                 tempEquivalents[j] += equivalent;
                 found = true;
                 break;
             }
+            unchecked { ++j; }
         }
 
         if (!found) {
             tempAddresses[uniqueCount] = record.stakeAddress;
             tempEquivalents[uniqueCount] = equivalent;
-            uniqueCount++;
+            unchecked { ++uniqueCount; }
         }
+        
+        unchecked { ++i; }
     }
 
     address[] memory stakeAddresses = new address[](uniqueCount);
     uint256[] memory equivalents = new uint256[](uniqueCount);
 
-    for (uint256 i = 0; i < uniqueCount; i++) {
+    for (uint256 i = 0; i < uniqueCount; ) {
         stakeAddresses[i] = tempAddresses[i];
         equivalents[i] = tempEquivalents[i];
+        unchecked { ++i; }
     }
 
     return (stakeAddresses, equivalents, totalStakeEquivalent);
@@ -1472,14 +1530,19 @@ function _safeRewardTransfer(
         require(isWithdrawSigner[_signer], "not signer");
 
         uint256 len = withdrawSigners.length;
-        for (uint i; i < len; i++) {
+        bool found = false;
+        
+        for (uint i = 0; i < len; ) {
             if (withdrawSigners[i] == _signer) {
                 withdrawSigners[i] = withdrawSigners[len - 1];
                 withdrawSigners.pop();
+                found = true;
                 break;
             }
+            unchecked { ++i; }
         }
 
+        require(found, "Signer not found in array");
         delete isWithdrawSigner[_signer];
 
         require(withdrawThreshold <= withdrawSigners.length, "threshold invalid");

@@ -2,7 +2,7 @@
 /**
  * 提取所有 standard_json 文件到 json/ 目录
  * 为每个合约生成只包含其依赖源文件的 standard_json
- * 使用方法: node scripts/generate_json.js
+ * 使用方法: node scripts/gen.js
  */
 
 const fs = require('fs');
@@ -96,7 +96,7 @@ function collectDependencies(sourcePath, allSources, visited = new Set()) {
 }
 
 /**
- * 为合约创建过滤后的 standard_json
+ * 为合约创建过滤后的 standard_json（包含编译器版本信息）
  */
 function createFilteredStandardJson(contractSourcePath, buildInfo) {
     const allSources = buildInfo.input.sources;
@@ -112,13 +112,20 @@ function createFilteredStandardJson(contractSourcePath, buildInfo) {
         }
     }
     
-    // 创建新的 standard_json
+    // 创建新的 standard_json，包含编译器版本信息
     const filteredInput = {
         ...buildInfo.input,
         sources: filteredSources
     };
     
-    return filteredInput;
+    // 添加编译器版本信息作为注释（在 JSON 中作为额外字段）
+    return {
+        compiler: {
+            version: buildInfo.solcVersion,
+            longVersion: buildInfo.solcLongVersion
+        },
+        input: filteredInput
+    };
 }
 
 /**
@@ -183,15 +190,17 @@ function main() {
     for (const contractName of contractNames) {
         const { sourcePath, buildInfo } = contractInfoMap.get(contractName);
         
-        // 创建过滤后的 standard_json
-        const filteredJson = createFilteredStandardJson(sourcePath, buildInfo);
+        // 创建过滤后的 standard_json（包含版本信息）
+        const result = createFilteredStandardJson(sourcePath, buildInfo);
         
-        const fileName = `${contractName.toLowerCase()}_standard_json.json`;
+        // 文件名中包含版本号
+        const version = buildInfo.solcVersion;
+        const fileName = `${contractName.toLowerCase()}_v${version}_standard_json.json`;
         const outputPath = path.join(outputDir, fileName);
 
-        if (safeWriteFile(outputPath, JSON.stringify(filteredJson, null, 2))) {
-            const sourceCount = Object.keys(filteredJson.sources).length;
-            console.log(`✅ ${fileName} (${sourceCount} 个源文件)`);
+        if (safeWriteFile(outputPath, JSON.stringify(result, null, 2))) {
+            const sourceCount = Object.keys(result.input.sources).length;
+            console.log(`✅ ${fileName} (${sourceCount} 个源文件, Solidity ${result.compiler.longVersion})`);
             successCount++;
         }
     }

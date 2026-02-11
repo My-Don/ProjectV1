@@ -1152,4 +1152,298 @@ describe("ServerNodeV2Backup 完整测试", function () {
     });
   });
 
+  // ==================== 22. Bug #1 修复验证：大节点标记重置 ====================
+  describe("22. Bug #1 修复验证：大节点标记重置", function () {
+    beforeEach(async function () {
+      // 创建测试节点
+      await serverNodeV2Backup.connect(owner).createNode([{
+        ip: "192.168.1.800",
+        describe: "Bug Test Node",
+        name: "Bug-001",
+        isActive: true,
+        nodeStakeAddress: owner.address,
+        id: 0,
+        capacity: 0,
+        createTime: 0,
+        blockHeight: 0
+      }]);
+      await serverNodeV2Backup.connect(owner).setWhiteList(admin.address, true);
+    });
+
+    it("取消大节点分配后应该重置标记（正确参数）", async function () {
+      // 分配大节点
+      await serverNodeV2Backup.connect(admin).allocateNodes(
+        user1.address, 
+        admin.address, 
+        1, // nodeType: 大节点
+        1, // quantity: 1个
+        0  // amount: 0
+      );
+      
+      // 验证节点被标记为大节点
+      const isAllocatedBefore = await serverNodeV2Backup.isNodeAllocatedAsBig(1);
+      expect(isAllocatedBefore).to.be.true;
+      
+      // 验证节点总分配金额为100万
+      const totalAllocatedBefore = await serverNodeV2Backup.nodeTotalAllocated(1);
+      expect(totalAllocatedBefore).to.equal(1000000n);
+      
+      // 获取用户分配记录
+      const allocations = await serverNodeV2Backup.getUserAllocations(user1.address);
+      expect(allocations.length).to.equal(1);
+      const allocation = allocations[0];
+      
+      // 取消分配（使用正确的参数）
+      await serverNodeV2Backup.connect(owner).deallocateNodes(
+        user1.address,
+        allocation.stakeAddress,
+        allocation.nodeType,
+        allocation.amount,
+        allocation.nodeId
+      );
+      
+      // ✅ 验证标记被重置
+      const isAllocatedAfter = await serverNodeV2Backup.isNodeAllocatedAsBig(1);
+      expect(isAllocatedAfter).to.be.false;
+      
+      // ✅ 验证节点总分配金额归零
+      const totalAllocatedAfter = await serverNodeV2Backup.nodeTotalAllocated(1);
+      expect(totalAllocatedAfter).to.equal(0n);
+      
+      // ✅ 验证用户分配记录被清空
+      const allocationsAfter = await serverNodeV2Backup.getUserAllocations(user1.address);
+      expect(allocationsAfter.length).to.equal(0);
+    });
+    
+    it("取消大节点分配后应该重置标记（验证修复逻辑）", async function () {
+      // 分配大节点
+      await serverNodeV2Backup.connect(admin).allocateNodes(
+        user1.address, 
+        admin.address, 
+        1, // nodeType: 大节点
+        1, // quantity: 1个
+        0  // amount: 0
+      );
+      
+      // 验证节点被标记为大节点
+      const isAllocatedBefore = await serverNodeV2Backup.isNodeAllocatedAsBig(1);
+      expect(isAllocatedBefore).to.be.true;
+      
+      // 验证节点总分配金额为100万
+      const totalAllocatedBefore = await serverNodeV2Backup.nodeTotalAllocated(1);
+      expect(totalAllocatedBefore).to.equal(1000000n);
+      
+      // 获取分配记录
+      const allocations = await serverNodeV2Backup.getUserAllocations(user1.address);
+      const allocation = allocations[0];
+      
+      // 正常取消分配
+      await serverNodeV2Backup.connect(owner).deallocateNodes(
+        user1.address,
+        allocation.stakeAddress,
+        allocation.nodeType,
+        allocation.amount,
+        allocation.nodeId
+      );
+      
+      // ✅ Bug #1 修复验证：
+      // 修复前：代码检查 if (nodeType == 1 && amount == DEFAULT_CAPACITY)
+      // 修复后：代码检查 if (nodeTotalAllocated[nodeId] == 0)
+      // 
+      // 修复后的逻辑更可靠，因为它基于实际的节点分配状态，
+      // 而不是依赖传入的参数（参数可能不准确）
+      
+      const isAllocatedAfter = await serverNodeV2Backup.isNodeAllocatedAsBig(1);
+      expect(isAllocatedAfter).to.be.false;
+      
+      // ✅ 验证节点总分配金额归零（这是修复后检查的关键条件）
+      const totalAllocatedAfter = await serverNodeV2Backup.nodeTotalAllocated(1);
+      expect(totalAllocatedAfter).to.equal(0n);
+      
+      // ✅ 验证修复后的逻辑：当 nodeTotalAllocated[nodeId] == 0 时，
+      // 大节点标记会被自动重置，无论传入的参数是什么
+    });
+    
+    it("部分取消分配不应该重置大节点标记", async function () {
+      // 分配大节点
+      await serverNodeV2Backup.connect(admin).allocateNodes(
+        user1.address, 
+        admin.address, 
+        1, // nodeType: 大节点
+        1, // quantity: 1个
+        0  // amount: 0
+      );
+      
+      // 验证节点被标记为大节点
+      const isAllocatedBefore = await serverNodeV2Backup.isNodeAllocatedAsBig(1);
+      expect(isAllocatedBefore).to.be.true;
+      
+      // 注意：实际上大节点是整机分配，不能部分取消
+      // 这个测试用例验证的是边界情况
+      // 如果尝试部分取消（传入错误的金额），应该失败
+      await expect(
+        serverNodeV2Backup.connect(owner).deallocateNodes(
+          user1.address,
+          admin.address,
+          1,
+          500000,  // ❌ 只取消50万（实际分配是100万）
+          1
+        )
+      ).to.be.revertedWith("Allocation record not found for user");
+      
+      // 验证标记仍然存在
+      const isAllocatedAfter = await serverNodeV2Backup.isNodeAllocatedAsBig(1);
+      expect(isAllocatedAfter).to.be.true;
+      
+      // 验证节点总分配金额未变
+      const totalAllocatedAfter = await serverNodeV2Backup.nodeTotalAllocated(1);
+      expect(totalAllocatedAfter).to.equal(1000000n);
+    });
+    
+    it("取消大节点分配后应该可以重新分配", async function () {
+      // 分配大节点
+      await serverNodeV2Backup.connect(admin).allocateNodes(user1.address, admin.address, 1, 1, 0);
+      
+      // 取消分配
+      const allocations = await serverNodeV2Backup.getUserAllocations(user1.address);
+      await serverNodeV2Backup.connect(owner).deallocateNodes(
+        user1.address,
+        allocations[0].stakeAddress,
+        allocations[0].nodeType,
+        allocations[0].amount,
+        allocations[0].nodeId
+      );
+      
+      // ✅ 验证可以重新分配该节点
+      await serverNodeV2Backup.connect(admin).allocateNodes(user2.address, admin.address, 1, 1, 0);
+      
+      // 验证节点被重新标记为大节点
+      const isAllocated = await serverNodeV2Backup.isNodeAllocatedAsBig(1);
+      expect(isAllocated).to.be.true;
+      
+      // 验证新用户的分配记录
+      const user2Allocations = await serverNodeV2Backup.getUserAllocations(user2.address);
+      expect(user2Allocations.length).to.equal(1);
+      expect(user2Allocations[0].nodeId).to.equal(1n);
+    });
+  });
+
+  // ==================== 23. Bug #2 修复验证：白名单逻辑对称性 ====================
+  describe("23. Bug #2 修复验证：白名单逻辑对称性", function () {
+    it("移除不存在的白名单应该 revert", async function () {
+      const user = user4.address;
+      
+      // ✅ 修复后：尝试移除不在白名单中的用户应该 revert
+      await expect(
+        serverNodeV2Backup.connect(owner).setWhiteList(user, false)
+      ).to.be.revertedWith("User not in whitelist");
+    });
+    
+    it("重复移除白名单应该 revert", async function () {
+      // 添加白名单
+      await serverNodeV2Backup.connect(owner).setWhiteList(user1.address, true);
+      
+      // 验证添加成功
+      const isWhitelistedBefore = await serverNodeV2Backup.whiteList(user1.address);
+      expect(isWhitelistedBefore).to.be.true;
+      
+      // 第一次移除
+      await serverNodeV2Backup.connect(owner).setWhiteList(user1.address, false);
+      
+      // 验证移除成功
+      const isWhitelistedAfter = await serverNodeV2Backup.whiteList(user1.address);
+      expect(isWhitelistedAfter).to.be.false;
+      
+      // ✅ 修复后：再次移除应该 revert
+      await expect(
+        serverNodeV2Backup.connect(owner).setWhiteList(user1.address, false)
+      ).to.be.revertedWith("User not in whitelist");
+    });
+    
+    it("添加和移除白名单应该保持逻辑对称", async function () {
+      // 测试添加已存在的白名单应该 revert
+      await serverNodeV2Backup.connect(owner).setWhiteList(user1.address, true);
+      
+      await expect(
+        serverNodeV2Backup.connect(owner).setWhiteList(user1.address, true)
+      ).to.be.revertedWith("User already whitelisted");
+      
+      // 测试移除不存在的白名单应该 revert
+      await expect(
+        serverNodeV2Backup.connect(owner).setWhiteList(user2.address, false)
+      ).to.be.revertedWith("User not in whitelist");
+      
+      // ✅ 验证逻辑对称性：添加和移除都使用 require 进行检查
+    });
+    
+    it("白名单计数器应该正确更新", async function () {
+      // 初始计数应该为0
+      let count = await serverNodeV2Backup.getWhitelistCount();
+      expect(count).to.equal(0n);
+      
+      // 添加第一个白名单
+      await serverNodeV2Backup.connect(owner).setWhiteList(user1.address, true);
+      count = await serverNodeV2Backup.getWhitelistCount();
+      expect(count).to.equal(1n);
+      
+      // 添加第二个白名单
+      await serverNodeV2Backup.connect(owner).setWhiteList(user2.address, true);
+      count = await serverNodeV2Backup.getWhitelistCount();
+      expect(count).to.equal(2n);
+      
+      // 移除第一个白名单
+      await serverNodeV2Backup.connect(owner).setWhiteList(user1.address, false);
+      count = await serverNodeV2Backup.getWhitelistCount();
+      expect(count).to.equal(1n);
+      
+      // 移除第二个白名单
+      await serverNodeV2Backup.connect(owner).setWhiteList(user2.address, false);
+      count = await serverNodeV2Backup.getWhitelistCount();
+      expect(count).to.equal(0n);
+      
+      // ✅ 验证计数器在添加和移除时都正确更新
+    });
+    
+    it("移除白名单后不应该有分配权限", async function () {
+      // 创建测试节点
+      await serverNodeV2Backup.connect(owner).createNode([{
+        ip: "192.168.1.900",
+        describe: "Whitelist Test Node",
+        name: "WL-001",
+        isActive: true,
+        nodeStakeAddress: owner.address,
+        id: 0,
+        capacity: 0,
+        createTime: 0,
+        blockHeight: 0
+      }]);
+      
+      // 添加白名单
+      await serverNodeV2Backup.connect(owner).setWhiteList(user1.address, true);
+      
+      // 验证白名单用户可以分配节点
+      await serverNodeV2Backup.connect(user1).allocateNodes(
+        user2.address, 
+        user1.address, 
+        2, // 中节点
+        1, 
+        0
+      );
+      
+      // 移除白名单
+      await serverNodeV2Backup.connect(owner).setWhiteList(user1.address, false);
+      
+      // ✅ 验证移除后不能分配节点
+      await expect(
+        serverNodeV2Backup.connect(user1).allocateNodes(
+          user2.address, 
+          user1.address, 
+          2, 
+          1, 
+          0
+        )
+      ).to.be.revertedWith("Only owner or whitelist");
+    });
+  });
+
 });

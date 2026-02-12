@@ -6,7 +6,7 @@ contract DecreasingRewardCalculator {
     uint256 public immutable deploymentTimestamp;
 
     // 初始每日奖励基数 (ETH)
-    // uint256 public constant INITIAL_DAILY_REWARD = 150000; 
+    // uint256 public constant INITIAL_DAILY_REWARD = 150000;
     uint256 public constant INITIAL_DAILY_REWARD = 1 ether;
 
     // 递减率 (10%)
@@ -29,7 +29,7 @@ contract DecreasingRewardCalculator {
      */
     function getDailyReward(
         uint256 daysFromDeployment
-    ) public returns (uint256 dailyReward) {
+    ) public view returns (uint256 dailyReward) {
         require(daysFromDeployment > 0, "Day must be positive");
 
         // 计算年数（1-based）
@@ -43,7 +43,6 @@ contract DecreasingRewardCalculator {
         // 计算该年的每日奖励
         dailyReward = _calculateYearlyReward(year);
 
-        emit RewardQueried(daysFromDeployment, dailyReward, year);
         return dailyReward;
     }
 
@@ -54,6 +53,7 @@ contract DecreasingRewardCalculator {
      */
     function getCurrentDailyReward()
         public
+        view
         returns (uint256 dailyReward, uint256 currentDay)
     {
         currentDay = getDaysSinceDeployment();

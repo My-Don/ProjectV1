@@ -578,9 +578,6 @@ contract ServerNodeV2Backup is
             isNodeAllocatedAsBig[nodeId] = false;
         }
 
-        // ⚠️ 注意：如果未来支持部分回收或节点迁移
-        // 需要重新评估 isNodeAllocatedAsBig 的重置逻辑
-
         /* 等效值回滚 */
         uint256 equivalent = (amount * SCALE) / DEFAULT_CAPACITY;
         userPhysicalNodesEquivalent[user] -= equivalent;

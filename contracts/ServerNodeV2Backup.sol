@@ -250,7 +250,7 @@ contract ServerNodeV2Backup is
 
         require(_owner != address(0), "Owner address is zero");
         require(
-            _rewardCalculator != address(0),
+            _rewardCalculator != address(0) && _rewardCalculator.code.length > 0,
             "Reward calculator address is zero"
         );
         uint256 length = _withdrawSigners.length;

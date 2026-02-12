@@ -103,6 +103,9 @@ contract ServerNodeV2Backup is
     mapping(uint256 => uint256) public nodeTotalAllocated; // 每个节点总共分配了多少金额（关键）
     mapping(uint256 => bool) public isNodeAllocatedAsBig; // 节点是否被分配成大节点了
 
+    // 防止 currentDay 倒退导致重复领取
+    uint256 public lastGlobalRewardDay;
+
     mapping(address => AllocationRecord[]) public userAllocationRecords; // 每个人的分配记录
     mapping(uint256 => AllocationRecord[]) public nodeAllocationRecords; // 每个节点的分配记录
 
@@ -123,6 +126,8 @@ contract ServerNodeV2Backup is
     }
     mapping(uint256 => WithdrawProposal) public withdrawProposals; // 提款提案
     mapping(uint256 => mapping(address => bool)) public withdrawalConfirmations; // 提款确认
+
+    uint256 public constant PROPOSAL_EXPIRY_TIME = 7 days; // ✅ 提案过期时间
 
     // ====== 控制开关 ======
     bool public pausedNodeAllocation; // 节点分配是否暂停
@@ -225,6 +230,7 @@ contract ServerNodeV2Backup is
         address to
     );
     event WithdrawMultiSigInitialized(address[] signers, uint256 threshold);
+    event WithdrawThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -250,7 +256,8 @@ contract ServerNodeV2Backup is
 
         require(_owner != address(0), "Owner address is zero");
         require(
-            _rewardCalculator != address(0) && _rewardCalculator.code.length > 0,
+            _rewardCalculator != address(0) &&
+                _rewardCalculator.code.length > 0,
             "Reward calculator address is zero"
         );
         uint256 length = _withdrawSigners.length;
@@ -520,6 +527,9 @@ contract ServerNodeV2Backup is
         if (nodeTotalAllocated[nodeId] == 0) {
             isNodeAllocatedAsBig[nodeId] = false;
         }
+
+        // ⚠️ 注意：如果未来支持部分回收或节点迁移
+        // 需要重新评估 isNodeAllocatedAsBig 的重置逻辑
 
         /* 等效值回滚 */
         uint256 equivalent = (amount * SCALE) / DEFAULT_CAPACITY;
@@ -1104,6 +1114,54 @@ contract ServerNodeV2Backup is
     }
 
     /**
+     * @dev 获取用户不同质押地址的数量（用于检查是否会超限）
+     * @param user 用户地址
+     * @return 不同质押地址的数量
+     */
+    function getUserStakeAddressCount(
+        address user
+    ) external view returns (uint256) {
+        AllocationRecord[] storage records = userAllocationRecords[user];
+        uint256 len = records.length;
+
+        if (len == 0) return 0;
+        if (len > MAX_USER_ALLOCATIONS) {
+            len = MAX_USER_ALLOCATIONS;
+        }
+
+        address[] memory tempAddresses = new address[](50);
+        uint256 uniqueCount = 0;
+
+        for (uint256 i = 0; i < len; ) {
+            address stakeAddr = records[i].stakeAddress;
+
+            bool found = false;
+            for (uint256 j = 0; j < uniqueCount; ) {
+                if (tempAddresses[j] == stakeAddr) {
+                    found = true;
+                    break;
+                }
+                unchecked {
+                    ++j;
+                }
+            }
+
+            if (!found && uniqueCount < 50) {
+                tempAddresses[uniqueCount] = stakeAddr;
+                unchecked {
+                    ++uniqueCount;
+                }
+            }
+
+            unchecked {
+                ++i;
+            }
+        }
+
+        return uniqueCount;
+    }
+
+    /**
      * @dev 更新等效值
      * @param user 用户地址
      * @param amount 分配金额
@@ -1324,6 +1382,11 @@ contract ServerNodeV2Backup is
         AllocationRecord[] storage records = userAllocationRecords[user];
         uint256 len = records.length;
 
+        // ✅ 限制最大记录数，防止 gas 爆炸
+        if (len > MAX_USER_ALLOCATIONS) {
+            len = MAX_USER_ALLOCATIONS;
+        }
+
         address[] memory tempAddresses = new address[](len);
         uint256[] memory tempEquivalents = new uint256[](len);
 
@@ -1366,9 +1429,12 @@ contract ServerNodeV2Backup is
 
             totalStakeEquivalent += equivalent;
 
+            address stakeAddr = record.stakeAddress;
+
+            // ✅ 完整遍历所有已记录的地址，确保统计准确
             bool found = false;
             for (uint256 j = 0; j < uniqueCount; ) {
-                if (tempAddresses[j] == record.stakeAddress) {
+                if (tempAddresses[j] == stakeAddr) {
                     tempEquivalents[j] += equivalent;
                     found = true;
                     break;
@@ -1379,7 +1445,9 @@ contract ServerNodeV2Backup is
             }
 
             if (!found) {
-                tempAddresses[uniqueCount] = record.stakeAddress;
+                // ⚠️ 如果超过数组长度，revert（避免统计偏差）
+                require(uniqueCount < len, "Too many unique stake addresses");
+                tempAddresses[uniqueCount] = stakeAddr;
                 tempEquivalents[uniqueCount] = equivalent;
                 unchecked {
                     ++uniqueCount;
@@ -1444,11 +1512,16 @@ contract ServerNodeV2Backup is
             uint256 dailyReward,
             uint16 currentYear,
             uint256 currentDay
-        ) = getCurrentRewardInfo();
+        ) = _getCurrentRewardInfo(); // ✅ 使用内部版本（有副作用）
         require(dailyReward > 0, "Daily reward is zero");
 
         // ===== 2️⃣ 计算有效总等效值（只统计 active 节点）=====
         uint256 effectiveTotal = 0;
+
+        // ✅ 缓存每个用户的质押信息，避免重复计算
+        address[][] memory allStakeAddresses = new address[][](length);
+        uint256[][] memory allEquivalents = new uint256[][](length);
+        uint256[] memory allTotalEquivalents = new uint256[](length);
 
         // 先计算所有用户的 active 节点总等效值
         for (uint256 i = 0; i < length; ) {
@@ -1468,12 +1541,17 @@ contract ServerNodeV2Backup is
                 continue;
             }
 
-            // 获取该用户 active 节点的等效值
+            // ✅ 获取并缓存该用户 active 节点的等效值
             (
-                ,
-                ,
+                address[] memory stakeAddresses,
+                uint256[] memory equivalents,
                 uint256 userActiveEquivalent
             ) = getStakeAddressesWithEquivalent(user);
+
+            allStakeAddresses[i] = stakeAddresses;
+            allEquivalents[i] = equivalents;
+            allTotalEquivalents[i] = userActiveEquivalent;
+
             effectiveTotal += userActiveEquivalent;
 
             unchecked {
@@ -1510,11 +1588,7 @@ contract ServerNodeV2Backup is
             }
 
             // 使用 active 节点的等效值计算奖励
-            (
-                ,
-                ,
-                uint256 userActiveEquivalent
-            ) = getStakeAddressesWithEquivalent(user);
+            uint256 userActiveEquivalent = allTotalEquivalents[i];
 
             if (userActiveEquivalent == 0) {
                 unchecked {
@@ -1576,13 +1650,11 @@ contract ServerNodeV2Backup is
             }
 
             /**
-             * 只从「仍然 active 的节点」统计质押等效值
+             * ✅ 使用缓存的质押等效值，避免重复计算
              */
-            (
-                address[] memory stakeAddresses,
-                uint256[] memory equivalents,
-                uint256 totalStakeEquivalent
-            ) = getStakeAddressesWithEquivalent(user);
+            address[] memory stakeAddresses = allStakeAddresses[i];
+            uint256[] memory equivalents = allEquivalents[i];
+            uint256 totalStakeEquivalent = allTotalEquivalents[i];
 
             // 若没有任何 active 节点参与，直接跳过
             if (totalStakeEquivalent == 0) {
@@ -1591,6 +1663,9 @@ contract ServerNodeV2Backup is
                 }
                 continue;
             }
+
+            // ===== 记录已领取, 先更新状态 =====
+            lastRewardDay[user][currentYear] = currentDay;
 
             // ===== 奖励拆分：50% 用户 + 50% 质押 =====
             uint256 userReward = totalReward / 2;
@@ -1633,9 +1708,6 @@ contract ServerNodeV2Backup is
                 }
             }
 
-            // ===== 记录已领取 =====
-            lastRewardDay[user][currentYear] = currentDay;
-
             unchecked {
                 ++usersProcessed;
                 ++i;
@@ -1653,13 +1725,14 @@ contract ServerNodeV2Backup is
     }
 
     /**
-     * @dev 获取当前奖励信息
+     * @dev 获取当前奖励信息（内部函数，有副作用）
      * @return dailyReward 每日奖励金额
      * @return currentYear 当前年份
      * @return currentDay 当前天数
+     * ⚠️ 注意：此函数会更新 lastGlobalRewardDay，只能在奖励分发时调用
      */
-    function getCurrentRewardInfo()
-        public
+    function _getCurrentRewardInfo()
+        internal
         returns (uint256 dailyReward, uint16 currentYear, uint256 currentDay)
     {
         // 调用奖励计算器获取数据
@@ -1668,14 +1741,54 @@ contract ServerNodeV2Backup is
         );
         require(success, "Failed to get current daily reward");
 
+        // ✅ 验证返回数据长度（两个 uint256 = 64 bytes）
+        require(data.length >= 64, "Invalid return data length");
+
         (dailyReward, currentDay) = abi.decode(data, (uint256, uint256));
 
         // 防止currentDay为0导致的下溢
         require(currentDay > 0, "Current day must be greater than 0");
 
-        // 计算当前年份（假设每年365天，最多30年）
+        // ✅ 防止 currentDay 倒退（重复领取攻击）
+        require(
+            currentDay >= lastGlobalRewardDay,
+            "Current day cannot decrease"
+        );
+        lastGlobalRewardDay = currentDay;
+
+        // ✅ 计算当前年份（假设每年365天）
+        // 移除 30 年上限，允许协议长期运行
         currentYear = uint16(((currentDay - 1) / 365) + 1);
-        if (currentYear > 30) currentYear = 30;
+        require(currentYear <= type(uint16).max, "Year overflow");
+
+        return (dailyReward, currentYear, currentDay);
+    }
+
+    /**
+     * @dev 获取当前奖励信息（只读版本，无副作用）
+     * @return dailyReward 每日奖励金额
+     * @return currentYear 当前年份
+     * @return currentDay 当前天数
+     */
+    function getCurrentRewardInfo()
+        public
+        view
+        returns (uint256 dailyReward, uint16 currentYear, uint256 currentDay)
+    {
+        // 调用奖励计算器获取数据
+        (bool success, bytes memory data) = REWARD.staticcall(
+            abi.encodeWithSignature("getCurrentDailyReward()")
+        );
+        require(success, "Failed to get current daily reward");
+
+        require(data.length >= 64, "Invalid return data length");
+
+        (dailyReward, currentDay) = abi.decode(data, (uint256, uint256));
+
+        require(currentDay > 0, "Current day must be greater than 0");
+
+        currentYear = uint16(((currentDay - 1) / 365) + 1);
+        require(currentYear <= type(uint16).max, "Year overflow");
 
         return (dailyReward, currentYear, currentDay);
     }
@@ -1736,6 +1849,13 @@ contract ServerNodeV2Backup is
         require(isWithdrawSigner[_signer], "not signer");
 
         uint256 len = withdrawSigners.length;
+
+        // ✅ 防止删除后签名者数量低于阈值（防止单签风险）
+        require(
+            len > withdrawThreshold,
+            "Cannot remove: would break threshold"
+        );
+
         bool found = false;
 
         for (uint i = 0; i < len; ) {
@@ -1753,11 +1873,29 @@ contract ServerNodeV2Backup is
         require(found, "Signer not found in array");
         delete isWithdrawSigner[_signer];
 
-        require(
-            withdrawThreshold <= withdrawSigners.length,
-            "threshold invalid"
-        );
         emit WithdrawSignerRemoved(_signer);
+    }
+
+    /**
+     * @dev 更新多签阈值
+     * @param _newThreshold 新的阈值
+     */
+    function updateWithdrawThreshold(uint256 _newThreshold) external onlyOwner {
+        require(_newThreshold > 0, "Threshold must be greater than 0");
+        require(
+            _newThreshold <= withdrawSigners.length,
+            "Threshold exceeds signers count"
+        );
+        // ✅ 防止阈值设置为 1（单签风险）
+        require(
+            _newThreshold > 1,
+            "Threshold must be greater than 1 for security"
+        );
+
+        uint256 oldThreshold = withdrawThreshold;
+        withdrawThreshold = _newThreshold;
+
+        emit WithdrawThresholdUpdated(oldThreshold, _newThreshold);
     }
 
     /**
@@ -1797,6 +1935,11 @@ contract ServerNodeV2Backup is
         WithdrawProposal storage proposal = withdrawProposals[proposalId];
         require(proposal.amount > 0, "Proposal does not exist");
         require(!proposal.executed, "Proposal already executed");
+        // ✅ 检查提案是否过期
+        require(
+            block.timestamp <= proposal.createdAt + PROPOSAL_EXPIRY_TIME,
+            "Proposal expired"
+        );
         require(
             !withdrawalConfirmations[proposalId][msg.sender],
             "Already confirmed"
@@ -1818,6 +1961,11 @@ contract ServerNodeV2Backup is
         WithdrawProposal storage proposal = withdrawProposals[proposalId];
         require(proposal.amount > 0, "Proposal does not exist");
         require(!proposal.executed, "Proposal already executed");
+        // ✅ 检查提案是否过期
+        require(
+            block.timestamp <= proposal.createdAt + PROPOSAL_EXPIRY_TIME,
+            "Proposal expired"
+        );
         require(
             proposal.confirmations >= withdrawThreshold,
             "Not enough confirmations"

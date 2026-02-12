@@ -39,13 +39,13 @@ module.exports = {
         }
       },
       {
-        version: "0.8.20", 
-        settings: { 
-          optimizer: { 
-            enabled: true, 
-            runs: 10000 
-          }, 
-            viaIR: true 
+        version: "0.8.20",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 10000
+          },
+          viaIR: true
         }
       },
       {
@@ -114,57 +114,59 @@ module.exports = {
     ]
   },
   networks: {
+    hardhat: {
+      chainId: 31337
+    },
     mainnet: {
       url: process.env.MAINNET_RPC_URL || "",
-      accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
-      chainId: parseInt(process.env.MAINNET_CHIAN_ID)
+      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      chainId: parseInt(process.env.MAINNET_CHIAN_ID) || 1
     },
     sepolia: {
       url: process.env.SEPOLIA_RPC_URL || "",
-      accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
-      chainId: parseInt(process.env.SEPOLIA_CHAIN_ID),
-      // 增加超时时间，防止网络问题
-      timeout: 120000, // 120秒
+      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      chainId: parseInt(process.env.SEPOLIA_CHAIN_ID) || 11155111,
+      timeout: 120000,
       gasPrice: "auto"
     },
     bscTestnet: {
       url: process.env.BSC_TESTNET_RPC_URL || "",
-      accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
-      chainId: parseInt(process.env.BSC_TESTNET_CHAIN_ID)
+      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      chainId: parseInt(process.env.BSC_TESTNET_CHAIN_ID) || 97
     },
     bsc: {
       url: process.env.BSC_MAINNET_RPC_URL || "",
-      accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
-      chainId: parseInt(process.env.BSC_MAINNET_CHAIN_ID)
+      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      chainId: parseInt(process.env.BSC_MAINNET_CHAIN_ID) || 56
     },
     local: {
       url: process.env.LOCAL_RPC_URL || "",
-      accounts: process.env.LOCAL_PRIVATE_KEY !== undefined ? [process.env.LOCAL_PRIVATE_KEY] : []
+      accounts: process.env.LOCAL_PRIVATE_KEY && process.env.LOCAL_PRIVATE_KEY.length === 66 ? [process.env.LOCAL_PRIVATE_KEY] : []
     },
     monadTestnet: {
-      url: process.env.MONAD_TESTNET_RPC_URL,
-      accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
-      chainId: parseInt(process.env.MONAD_TESTNET_CHAIN_ID)
+      url: process.env.MONAD_TESTNET_RPC_URL || "",
+      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      chainId: parseInt(process.env.MONAD_TESTNET_CHAIN_ID) || 0
     },
     monadMainnet: {
-      url: process.env.MONAD_MAINNET_RPC_URL,
-      accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
-      chainId: parseInt(process.env.MONAD_MAINNET_CHAIN_ID)
+      url: process.env.MONAD_MAINNET_RPC_URL || "",
+      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      chainId: parseInt(process.env.MONAD_MAINNET_CHAIN_ID) || 0
     },
     beechainMainnet: {
-      url: process.env.BEE_MAINNET_RPC_URL,
-      accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
-      chainId: parseInt(process.env.BEE_MAINNET_CHAIN_ID)
+      url: process.env.BEE_MAINNET_RPC_URL || "",
+      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      chainId: parseInt(process.env.BEE_MAINNET_CHAIN_ID) || 0
     },
     arbitrumSepolia: {
-      url: process.env.ARB_SEPOLIA_RPC_URL,
-      accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
-      chainId: parseInt(process.env.ARB_SEPOLIA_CHAIN_ID)
+      url: process.env.ARB_SEPOLIA_RPC_URL || "",
+      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      chainId: parseInt(process.env.ARB_SEPOLIA_CHAIN_ID) || 0
     },
     baseSepolia: {
-      url: process.env.BASE_SEPOLIA_RPC_URL,
-      accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : [],
-      chainId: parseInt(process.env.BASE_SEPOLIA_CHIAN_ID)
+      url: process.env.BASE_SEPOLIA_RPC_URL || "",
+      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      chainId: parseInt(process.env.BASE_SEPOLIA_CHIAN_ID) || 0
     },
   },
   etherscan: {
@@ -229,7 +231,7 @@ module.exports = {
           browserURL: process.env.BEECHAIN_ETHERSCAN_URL
         }
       },
-       {
+      {
         network: "arbitrumSepolia",
         chainId: parseInt(process.env.ARB_SEPOLIA_CHAIN_ID),
         urls: {

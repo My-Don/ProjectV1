@@ -25,7 +25,7 @@ library Counters {
 
 /**
  * @title 服务器节点管理合约
- * @notice 管理节点创建、分配、奖励、暂停等所有功能
+ * @notice 管理节点创建、分配节点、奖励分发、暂停节点、白名单、多签等所有功能
  * @dev 可升级，确保安全可靠
  */
 contract ServerNodeV2Backup is
@@ -641,7 +641,7 @@ contract ServerNodeV2Backup is
 
             // 检查节点是否符合分配条件
             if (
-                !isNodeAllocatedAsBig[nodeId] && nodeTotalAllocated[nodeId] == 0 // 没被分配过大节点 // 没分配过任何金额
+                !isNodeAllocatedAsBig[nodeId] && nodeTotalAllocated[nodeId] == 0 // 没被分配过大节点并且没分配过任何金额
             ) {
                 // 标记为大节点
                 isNodeAllocatedAsBig[nodeId] = true;
@@ -1618,7 +1618,7 @@ contract ServerNodeV2Backup is
                     }
                     continue;
                 }
-
+                // 给质押地址
                 _safeRewardTransfer(stakeAddr, stakeReward);
 
                 emit StakeRewardDistributed(
@@ -1699,7 +1699,6 @@ contract ServerNodeV2Backup is
     // ==================== 其他功能 ====================
     /**
      * @dev 查询合约余额
-     * @return 合约当前的ETH余额
      */
     function getContractBalance() public view returns (uint256) {
         return address(this).balance;

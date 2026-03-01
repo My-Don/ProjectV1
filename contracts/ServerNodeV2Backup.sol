@@ -39,7 +39,8 @@ contract ServerNodeV2Backup is
     uint16 public constant BASENODE = 500; // 基础节点数，用来算奖励
     uint8 public constant MAX_WHITELIST = 3; // 白名单最多3个人
     uint256 public constant DEFAULT_CAPACITY = 1_000_000; // 每个节点100万容量
-    uint256 private constant SCALE = 1e6; // 精度放大倍数，用来算等效值
+    // SCALE 与 DEFAULT_CAPACITY 强绑定，避免后续仅改一处导致等效值计算偏差
+    uint256 private constant SCALE = DEFAULT_CAPACITY; // 精度放大倍数，用来算等效值
 
     // 常量定义
     uint256 public constant MAX_BATCH_ALLOCATIONS = 20; // 批量分配最大数量

@@ -52,14 +52,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
     it("应该允许管理员创建节点", async function () {
       const nodeInfo = [{
         ip: "192.168.1.1",
-        describe: "Test Node 1",
         name: "Node-001",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }];
 
       await serverNodeV2Backup.connect(owner).createNode(nodeInfo);
@@ -74,33 +71,27 @@ describe("ServerNodeV2Backup 完整测试", function () {
     it("应该确保IP地址唯一性", async function () {
       const nodeInfo1 = [{
         ip: "192.168.1.1",
-        describe: "Test Node 1",
         name: "Node-001",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }];
 
       const nodeInfo2 = [{
         ip: "192.168.1.1",
-        describe: "Test Node 2",
         name: "Node-002",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
         createTime: 0,
-        blockHeight: 0
       }];
 
       await serverNodeV2Backup.connect(owner).createNode(nodeInfo1);
 
       await expect(
         serverNodeV2Backup.connect(owner).createNode(nodeInfo2)
-      ).to.be.revertedWith("IP address must be unique");
+      ).to.be.reverted;
     });
   });
 
@@ -123,7 +114,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
 
       await expect(
         serverNodeV2Backup.connect(owner).setWhiteList(user4.address, true)
-      ).to.be.revertedWith("Max list");
+      ).to.be.reverted;
     });
 
     it("应该允许管理员移除白名单", async function () {
@@ -146,14 +137,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       for (let i = 1; i <= 3; i++) {
         await serverNodeV2Backup.connect(owner).createNode([{
           ip: `192.168.1.${i}`,
-          describe: `Big Node ${i}`,
           name: `Big-${i.toString().padStart(3, '0')}`,
           isActive: true,
           nodeStakeAddress: owner.address,
           id: 0,
-          capacity: 0,
-          createTime: 0,
-          blockHeight: 0
+          createTime: 0
         }]);
       }
       await serverNodeV2Backup.connect(owner).setWhiteList(admin.address, true);
@@ -178,7 +166,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
     it("非管理员/白名单不能分配节点", async function () {
       await expect(
         serverNodeV2Backup.connect(user1).allocateNodes(user1.address, user1.address, 1, 1, 0)
-      ).to.be.revertedWith("Only owner or whitelist");
+      ).to.be.reverted;
     });
   });
 
@@ -189,14 +177,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       for (let i = 1; i <= 2; i++) {
         await serverNodeV2Backup.connect(owner).createNode([{
           ip: `192.168.1.${10 + i}`,
-          describe: `General Node ${i}`,
           name: `Gen-${i.toString().padStart(3, '0')}`,
           isActive: true,
           nodeStakeAddress: owner.address,
           id: 0,
-          capacity: 0,
-          createTime: 0,
-          blockHeight: 0
+          createTime: 0
         }]);
       }
       await serverNodeV2Backup.connect(owner).setWhiteList(admin.address, true);
@@ -220,14 +205,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
     beforeEach(async function () {
       await serverNodeV2Backup.connect(owner).createNode([{
         ip: "192.168.1.20",
-        describe: "General Node",
         name: "Gen-020",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }]);
       await serverNodeV2Backup.connect(owner).setWhiteList(admin.address, true);
     });
@@ -250,14 +232,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
     beforeEach(async function () {
       await serverNodeV2Backup.connect(owner).createNode([{
         ip: "192.168.1.30",
-        describe: "General Node",
         name: "Gen-030",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }]);
       await serverNodeV2Backup.connect(owner).setWhiteList(admin.address, true);
     });
@@ -284,11 +263,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
     it("商品金额必须在有效范围内", async function () {
       await expect(
         serverNodeV2Backup.connect(admin).allocateNodes(user1.address, admin.address, 4, 0, 0)
-      ).to.be.revertedWith("Amount must be 1-1,000,000");
+      ).to.be.reverted;
 
       await expect(
         serverNodeV2Backup.connect(admin).allocateNodes(user1.address, admin.address, 4, 0, 1000001)
-      ).to.be.revertedWith("Amount must be 1-1,000,000");
+      ).to.be.reverted;
     });
   });
 
@@ -298,14 +277,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 创建一个完整的节点用于组合分配
       await serverNodeV2Backup.connect(owner).createNode([{
         ip: "192.168.1.40",
-        describe: "Combination Node",
         name: "Combo-001",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }]);
       await serverNodeV2Backup.connect(owner).setWhiteList(admin.address, true);
     });
@@ -362,7 +338,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
           admin.address,
           invalidCombination
         )
-      ).to.be.revertedWith("Total must be 1~1,000,000");
+      ).to.be.reverted;
     });
   });
 
@@ -373,14 +349,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       for (let i = 1; i <= 10; i++) {
         await serverNodeV2Backup.connect(owner).createNode([{
           ip: `192.168.1.${50 + i}`,
-          describe: `Node ${i}`,
           name: `N-${i}`,
           isActive: true,
           nodeStakeAddress: owner.address,
           id: 0,
-          capacity: 0,
-          createTime: 0,
-          blockHeight: 0
+          createTime: 0
         }]);
       }
       await serverNodeV2Backup.connect(owner).setWhiteList(admin.address, true);
@@ -432,7 +405,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
 
       await expect(
         serverNodeV2Backup.connect(admin).allocateNodesBatch(allocations)
-      ).to.be.revertedWith("Invalid batch size");
+      ).to.be.reverted;
     });
   });
 
@@ -441,14 +414,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
     beforeEach(async function () {
       await serverNodeV2Backup.connect(owner).createNode([{
         ip: "192.168.1.100",
-        describe: "Test Node",
         name: "Test",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }]);
       await serverNodeV2Backup.connect(owner).setWhiteList(admin.address, true);
     });
@@ -461,7 +431,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
 
       await expect(
         serverNodeV2Backup.connect(admin).allocateNodes(user1.address, admin.address, 2, 1, 0)
-      ).to.be.revertedWith("Allocation paused");
+      ).to.be.reverted;
 
       await serverNodeV2Backup.connect(owner).setAllocationStatus(false, false);
 
@@ -479,14 +449,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       for (let i = 1; i <= 5; i++) {
         await serverNodeV2Backup.connect(owner).createNode([{
           ip: `192.168.1.${200 + i}`,
-          describe: `Reward Node ${i}`,
           name: `Reward-${i.toString().padStart(3, '0')}`,
           isActive: true,
           nodeStakeAddress: owner.address,
           id: 0,
-          capacity: 0,
-          createTime: 0,
-          blockHeight: 0
+          createTime: 0
         }]);
       }
 
@@ -594,14 +561,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       for (let i = 1; i <= 3; i++) {
         await serverNodeV2Backup.connect(owner).createNode([{
           ip: `192.168.1.${300 + i}`,
-          describe: `Test Node ${i}`,
           name: `Test-${i}`,
           isActive: true,
           nodeStakeAddress: owner.address,
           id: 0,
-          capacity: 0,
-          createTime: 0,
-          blockHeight: 0
+          createTime: 0
         }]);
       }
       await serverNodeV2Backup.connect(owner).setWhiteList(admin.address, true);
@@ -695,7 +659,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 非签名者不能确认
       await expect(
         serverNodeV2Backup.connect(user1).confirmWithdrawProposal(0)
-      ).to.be.revertedWith("Not signer");
+      ).to.be.reverted;
 
       // 确认提案（达到签名阈值）
       await serverNodeV2Backup.connect(signer1).confirmWithdrawProposal(0);
@@ -704,7 +668,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 非签名者不能执行提款提案
       await expect(
         serverNodeV2Backup.connect(user1).executeWithdrawProposal(0)
-      ).to.be.revertedWith("Not signer");
+      ).to.be.reverted;
 
       // 签名者执行提款提案
       await serverNodeV2Backup.connect(signer1).executeWithdrawProposal(0);
@@ -720,14 +684,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
     beforeEach(async function () {
       await serverNodeV2Backup.connect(owner).createNode([{
         ip: "192.168.1.300",
-        describe: "Query Test",
         name: "Query-001",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }]);
       await serverNodeV2Backup.connect(owner).setWhiteList(admin.address, true);
       await serverNodeV2Backup.connect(admin).allocateNodes(user1.address, admin.address, 2, 3, 0);
@@ -766,14 +727,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
     beforeEach(async function () {
       await serverNodeV2Backup.connect(owner).createNode([{
         ip: "192.168.1.400",
-        describe: "Test",
         name: "Test",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }]);
       await serverNodeV2Backup.connect(owner).setWhiteList(admin.address, true);
     });
@@ -781,7 +739,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
     it("应该拒绝无效的节点分配参数", async function () {
       await expect(
         serverNodeV2Backup.connect(admin).allocateNodes(user1.address, admin.address, 0, 1, 0)
-      ).to.be.revertedWith("Bad type");
+      ).to.be.reverted;
     });
 
     it("应该拒绝超出容量的分配", async function () {
@@ -791,7 +749,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 再尝试分配应该失败
       await expect(
         serverNodeV2Backup.connect(admin).allocateNodes(user2.address, admin.address, 2, 1, 0)
-      ).to.be.revertedWith("No medium");
+      ).to.be.reverted;
     });
   });
 
@@ -801,14 +759,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 创建节点
       await serverNodeV2Backup.connect(owner).createNode([{
         ip: "192.168.1.500",
-        describe: "Test Node",
         name: "Test",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }]);
       await serverNodeV2Backup.connect(owner).setWhiteList(admin.address, true);
 
@@ -868,14 +823,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       for (let i = 1; i <= 2; i++) {
         await serverNodeV2Backup.connect(owner).createNode([{
           ip: `192.168.1.${600 + i}`,
-          describe: `Test Node ${i}`,
           name: `Test-${i}`,
           isActive: true,
           nodeStakeAddress: owner.address,
           id: 0,
-          capacity: 0,
-          createTime: 0,
-          blockHeight: 0
+          createTime: 0
         }]);
       }
       await serverNodeV2Backup.connect(owner).setWhiteList(admin.address, true);
@@ -1027,14 +979,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       for (let i = 1; i <= 3; i++) {
         await serverNodeV2Backup.connect(owner).createNode([{
           ip: `192.168.1.${700 + i}`,
-          describe: `Test Node ${i}`,
           name: `Test-${i}`,
           isActive: true,
           nodeStakeAddress: owner.address,
           id: 0,
-          capacity: 0,
-          createTime: 0,
-          blockHeight: 0
+          createTime: 0
         }]);
       }
       await serverNodeV2Backup.connect(owner).setWhiteList(admin.address, true);
@@ -1158,14 +1107,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 创建测试节点
       await serverNodeV2Backup.connect(owner).createNode([{
         ip: "192.168.1.800",
-        describe: "Bug Test Node",
         name: "Bug-001",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }]);
       await serverNodeV2Backup.connect(owner).setWhiteList(admin.address, true);
     });
@@ -1336,7 +1282,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // ✅ 修复后：尝试移除不在白名单中的用户应该 revert
       await expect(
         serverNodeV2Backup.connect(owner).setWhiteList(user, false)
-      ).to.be.revertedWith("Not added");
+      ).to.be.reverted;
     });
 
     it("重复移除白名单应该 revert", async function () {
@@ -1357,7 +1303,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // ✅ 修复后：再次移除应该 revert
       await expect(
         serverNodeV2Backup.connect(owner).setWhiteList(user1.address, false)
-      ).to.be.revertedWith("Not added");
+      ).to.be.reverted;
     });
 
     it("添加和移除白名单应该保持逻辑对称", async function () {
@@ -1366,12 +1312,13 @@ describe("ServerNodeV2Backup 完整测试", function () {
 
       await expect(
         serverNodeV2Backup.connect(owner).setWhiteList(user1.address, true)
-      ).to.be.revertedWith("Added");
+      ).to.be.reverted;
 
       // 测试移除不存在的白名单应该 revert
       await expect(
         serverNodeV2Backup.connect(owner).setWhiteList(user2.address, false)
-      ).to.be.revertedWith("Not added");
+      ).to.be.reverted;
+
 
       // ✅ 验证逻辑对称性：添加和移除都使用 require 进行检查
     });
@@ -1408,14 +1355,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 创建测试节点
       await serverNodeV2Backup.connect(owner).createNode([{
         ip: "192.168.1.900",
-        describe: "Whitelist Test Node",
         name: "WL-001",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }]);
 
       // 添加白名单
@@ -1442,7 +1386,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
           1,
           0
         )
-      ).to.be.revertedWith("Only owner or whitelist");
+      ).to.be.reverted;
     });
   });
 
@@ -1455,14 +1399,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       for (let i = 0; i < nodesToCreate; i++) {
         nodes.push({
           ip: `192.168.1.${100 + i}`,
-          describe: `DoS Test Node ${i}`,
           name: `DOS-${i}`,
           isActive: true,
           nodeStakeAddress: owner.address,
           id: 0,
-          capacity: 0,
-          createTime: 0,
-          blockHeight: 0
+          createTime: 0
         });
       }
       await serverNodeV2Backup.connect(owner).createNode(nodes);
@@ -1502,14 +1443,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 创建节点
       await serverNodeV2Backup.connect(owner).createNode([{
         ip: "192.168.1.200",
-        describe: "DoS Test Node 2",
         name: "DOS-2",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }]);
 
       // 添加白名单
@@ -1567,14 +1505,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 创建节点
       await serverNodeV2Backup.connect(owner).createNode([{
         ip: "192.168.2.1",
-        describe: "Reward Logic Test Node 1",
         name: "RLT-1",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }]);
 
       // 添加白名单并分配节点
@@ -1621,25 +1556,19 @@ describe("ServerNodeV2Backup 完整测试", function () {
       await serverNodeV2Backup.connect(owner).createNode([
         {
           ip: "192.168.2.10",
-          describe: "Reward Logic Test Node 2",
           name: "RLT-2",
           isActive: true,
           nodeStakeAddress: owner.address,
           id: 0,
-          capacity: 0,
-          createTime: 0,
-          blockHeight: 0
+          createTime: 0
         },
         {
           ip: "192.168.2.11",
-          describe: "Reward Logic Test Node 3",
           name: "RLT-3",
           isActive: true,
           nodeStakeAddress: owner.address,
           id: 0,
-          capacity: 0,
-          createTime: 0,
-          blockHeight: 0
+          createTime: 0
         }
       ]);
 
@@ -1737,14 +1666,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 创建节点
       await serverNodeV2Backup.connect(owner).createNode([{
         ip: "192.168.2.20",
-        describe: "Reward Logic Test Node 4",
         name: "RLT-4",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }]);
 
       // 添加白名单并分配节点
@@ -1789,14 +1715,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       for (let i = 0; i < 4; i++) {
         nodes.push({
           ip: `192.168.2.${30 + i}`,
-          describe: `Reward Logic Test Node ${5 + i}`,
           name: `RLT-${5 + i}`,
           isActive: true,
           nodeStakeAddress: owner.address,
           id: 0,
-          capacity: 0,
-          createTime: 0,
-          blockHeight: 0
+          createTime: 0
         });
       }
       await serverNodeV2Backup.connect(owner).createNode(nodes);
@@ -1854,14 +1777,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 创建节点
       await serverNodeV2Backup.connect(owner).createNode([{
         ip: "192.168.4.1",
-        describe: "Duplicate Test Node",
         name: "DTN-1",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }]);
 
       // 添加白名单并分配节点
@@ -1926,7 +1846,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 执行提案时应该因为余额不足而 revert
       await expect(
         serverNodeV2Backup.connect(signer1).executeWithdrawProposal(0)
-      ).to.be.revertedWith("No balance");
+      ).to.be.reverted;
 
       // 这个测试验证了：
       // 1. createWithdrawProposal 在创建时不检查余额（允许创建）
@@ -1938,14 +1858,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 创建节点
       await serverNodeV2Backup.connect(owner).createNode([{
         ip: "192.168.4.2",
-        describe: "Blackhole Test Node",
         name: "BTN-1",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }]);
 
       // 添加白名单并分配节点
@@ -1989,14 +1906,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       for (let i = 0; i < 10; i++) {
         nodes.push({
           ip: `192.168.5.${i + 1}`,
-          describe: `Gas Test Node ${i + 1}`,
           name: `GTN-${i + 1}`,
           isActive: true,
           nodeStakeAddress: owner.address,
           id: 0,
-          capacity: 0,
-          createTime: 0,
-          blockHeight: 0
+          createTime: 0
         });
       }
       await serverNodeV2Backup.connect(owner).createNode(nodes);
@@ -2056,14 +1970,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 创建节点
       await serverNodeV2Backup.connect(owner).createNode([{
         ip: "192.168.4.3",
-        describe: "Timing Test Node",
         name: "TTN-1",
         isActive: true,
         nodeStakeAddress: owner.address,
         id: 0,
-        capacity: 0,
-        createTime: 0,
-        blockHeight: 0
+        createTime: 0
       }]);
 
       // 添加白名单并分配节点

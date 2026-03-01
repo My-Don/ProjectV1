@@ -256,6 +256,7 @@ contract ServerNodeV2Backup is
     error ThresholdMustBePositive(); // 阈值必须大于0
     error ThresholdExceedsSigners(); // 阈值超过签名者数量
     error ThresholdMustBeGreaterThanOne(); // 阈值必须大于1
+    error DuplicateProposalExists(); // 存在相同参数的未执行提案
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -286,9 +287,9 @@ contract ServerNodeV2Backup is
         __ReentrancyGuard_init();
         __Pausable_init();
         uint256 length = _withdrawSigners.length;
-        require(length > 0, "Empty signers");
+        require(length > 0, "No signers");
         require(_withdrawThreshold > 1, "Threshold > 1");
-        require(_withdrawThreshold <= length, "Threshold > signers");
+        require(_withdrawThreshold <= length, "Too high");
 
         REWARD = _rewardCalculator;
 
@@ -384,7 +385,7 @@ contract ServerNodeV2Backup is
         NodeInfo[] calldata _nodeInfo
     ) public onlyOwner nonReentrant {
         uint256 length = _nodeInfo.length;
-        require(length > 0, "Empty nodes");
+        require(length > 0, "No nodes");
         require(
             deployNode.length + length <= BIGNODE,
             "Exceeds max physical nodes (2000)"
@@ -475,15 +476,15 @@ contract ServerNodeV2Backup is
      * 限制：白名单最多只能有3个人
      */
     function setWhiteList(address user, bool _isTrue) external onlyOwner {
-        require(user != address(0), "Invalid user");
+        require(user != address(0), "No user");
 
         if (_isTrue) {
-            require(currentWhitelistCount < MAX_WHITELIST, "Max whitelist");
-            require(!whiteList[user], "Already whitelisted");
+            require(currentWhitelistCount < MAX_WHITELIST, "Max list");
+            require(!whiteList[user], "Added");
             whiteList[user] = true;
             currentWhitelistCount++;
         } else {
-            require(whiteList[user], "Not in whitelist");
+            require(whiteList[user], "Not added");
             whiteList[user] = false;
             currentWhitelistCount--;
         }
@@ -694,10 +695,10 @@ contract ServerNodeV2Backup is
         uint256 amount
     ) internal {
         // 检查基本参数
-        require(user != address(0), "Invalid user");
-        require(stakeAddress != address(0), "Invalid stake");
-        require(user != stakeAddress, "User == stake");
-        require(nodeType >= 1 && nodeType <= 4, "Invalid type");
+        require(user != address(0), "No user");
+        require(stakeAddress != address(0), "No stake");
+        require(user != stakeAddress, "Same addr");
+        require(nodeType >= 1 && nodeType <= 4, "Bad type");
 
         uint256 totalAmount;
 
@@ -792,7 +793,7 @@ contract ServerNodeV2Backup is
                 ++i;
             }
         }
-        require(allocated == quantity, "Insufficient big nodes");
+        require(allocated == quantity, "No big nodes");
     }
 
     /**
@@ -867,7 +868,7 @@ contract ServerNodeV2Backup is
                 ++i;
             }
         }
-        require(remaining == 0, "Insufficient medium");
+        require(remaining == 0, "No medium");
     }
 
     /**
@@ -934,7 +935,7 @@ contract ServerNodeV2Backup is
                 ++i;
             }
         }
-        require(remaining == 0, "Insufficient small");
+        require(remaining == 0, "No small");
     }
 
     /**
@@ -994,7 +995,7 @@ contract ServerNodeV2Backup is
                 ++i;
             }
         }
-        require(remaining == 0, "Insufficient commodity");
+        require(remaining == 0, "No commodity");
     }
 
     // ==================== 组合分配 ====================
@@ -1283,12 +1284,11 @@ contract ServerNodeV2Backup is
     function getNodeInfo(
         uint256 nodeId
     ) external view returns (NodeInfo memory) {
-        require(nodeId > 0, "Invalid node ID");
-
+        require(nodeId > 0, "No ID");
         uint256 index = nodeIndexById[nodeId];
-        require(index < deployNode.length, "Node not found");
+        require(index < deployNode.length, "No node");
         NodeInfo storage node = deployNode[index];
-        require(node.id == nodeId, "Node ID mismatch");
+        require(node.id == nodeId, "ID mismatch");
         return node;
     }
 
@@ -1301,10 +1301,10 @@ contract ServerNodeV2Backup is
     function getNodeRemainingCapacity(
         uint256 nodeId
     ) public view returns (uint256) {
-        require(nodeId > 0, "Invalid node ID");
+        require(nodeId > 0, "No ID");
         require(
             nodeIndexById[nodeId] < deployNode.length,
-            "Node does not exist"
+            "No node"
         );
         if (isNodeAllocatedAsBig[nodeId]) return 0; // 大节点已被完全分配
         return DEFAULT_CAPACITY - nodeTotalAllocated[nodeId];
@@ -1318,10 +1318,10 @@ contract ServerNodeV2Backup is
     function getNodeTotalAllocated(
         uint256 nodeId
     ) public view returns (uint256) {
-        require(nodeId > 0, "Invalid node ID");
+        require(nodeId > 0, "No ID");
         require(
             nodeIndexById[nodeId] < deployNode.length,
-            "Node does not exist"
+            "No node"
         );
         return nodeTotalAllocated[nodeId];
     }
@@ -1460,11 +1460,11 @@ contract ServerNodeV2Backup is
      * @param isActive 是否暂停
      */
     function setNodeStatus(uint256 nodeId, bool isActive) external onlyOwner {
-        require(nodeId > 0, "Invalid node ID");
+        require(nodeId > 0, "No ID");
         uint256 index = nodeIndexById[nodeId];
-        require(index < deployNode.length, "Node not found");
+        require(index < deployNode.length, "No node");
         NodeInfo storage node = deployNode[index];
-        require(node.id == nodeId, "Node ID mismatch");
+        require(node.id == nodeId, "ID mismatch");
         node.isActive = isActive;
 
         emit NodeStatusChanged(nodeId, isActive);
@@ -1498,17 +1498,9 @@ contract ServerNodeV2Backup is
             uint256 nodeId = record.nodeId;
 
             uint256 nodeIndex = nodeIndexById[nodeId];
-            if (nodeIndex >= deployNode.length) {
-                unchecked {
-                    ++i;
-                }
-                continue;
-            }
-            if (deployNode[nodeIndex].id != nodeId) {
-                unchecked {
-                    ++i;
-                }
-                continue;
+            if (nodeIndex >= deployNode.length || deployNode[nodeIndex].id != nodeId) {
+                // 节点索引不匹配，说明数据损坏
+                revert NodeIndexCorrupted(nodeId, nodeId, deployNode[nodeIndex].id);
             }
 
             // 统计 active 节点
@@ -1531,7 +1523,7 @@ contract ServerNodeV2Backup is
 
             address stakeAddr = record.stakeAddress;
 
-            // ✅ 完整遍历所有已记录的地址，确保统计准确
+            // ✅ 遍历所有已记录的地址，确保统计准确
             bool found = false;
             for (uint256 j = 0; j < uniqueCount; ) {
                 if (tempAddresses[j] == stakeAddr) {
@@ -1605,7 +1597,7 @@ contract ServerNodeV2Backup is
             uint16 currentYear,
             uint256 currentDay
         ) = _getCurrentRewardInfo(); 
-        require(dailyReward > 0, "Daily reward is zero");
+        require(dailyReward > 0, "No reward");
 
         // ===== 2️⃣ 计算有效总等效值（只统计 active 节点）=====
         uint256 effectiveTotal = 0;
@@ -1671,7 +1663,7 @@ contract ServerNodeV2Backup is
             effectiveTotal = BASENODE * SCALE;
         }
 
-        require(effectiveTotal > 0, "No effective");
+        require(effectiveTotal > 0, "No total");
 
         // ===== 3️⃣ 第一轮：计算所有用户应得奖励（不转账）=====
         uint256[] memory userRewards = new uint256[](length);
@@ -1849,7 +1841,7 @@ contract ServerNodeV2Backup is
         (dailyReward, currentYear, currentDay) = _getCurrentRewardInfoView();
 
         // ✅ 防止 currentDay 倒退（重复领取攻击），只在天数增加时才写入，减少不必要的 SSTORE
-        require(currentDay >= lastGlobalRewardDay, "Day decrease");
+        require(currentDay >= lastGlobalRewardDay, "Day down");
         if (currentDay > lastGlobalRewardDay) {
             lastGlobalRewardDay = currentDay;
         }
@@ -1872,8 +1864,8 @@ contract ServerNodeV2Backup is
         (bool successDay, bytes memory dataDay) = REWARD.staticcall(
             abi.encodeWithSignature("getDaysSinceDeployment()")
         );
-        require(successDay, "Reward call failed");
-        require(dataDay.length >= 32, "Invalid data");
+        require(successDay, "Call failed");
+        require(dataDay.length >= 32, "Bad data");
 
         currentDay = abi.decode(dataDay, (uint256));
         require(currentDay > 0, "Day > 0");
@@ -1882,8 +1874,8 @@ contract ServerNodeV2Backup is
         (bool successReward, bytes memory dataReward) = REWARD.staticcall(
             abi.encodeWithSignature("getDailyReward(uint256)", currentDay)
         );
-        require(successReward, "Reward call failed");
-        require(dataReward.length >= 32, "Invalid data");
+        require(successReward, "Call failed");
+        require(dataReward.length >= 32, "Bad data");
 
         dailyReward = abi.decode(dataReward, (uint256));
 
@@ -2042,6 +2034,18 @@ contract ServerNodeV2Backup is
     ) external onlyWithdrawMultiSig returns (uint256) {
         require(_amount > 0, "Amount > 0");
         require(_to != address(0), "Invalid recipient");
+        
+        uint256 start = nextWithdrawProposalId > 50 ? nextWithdrawProposalId - 50 : 0;
+        for (uint256 i = start; i < nextWithdrawProposalId; ) {
+            WithdrawProposal storage p = withdrawProposals[i];
+            if (p.amount > 0 && !p.executed && p.amount == _amount && p.to == _to) {
+                if (block.timestamp <= p.createdAt + PROPOSAL_EXPIRY_TIME) {
+                    revert DuplicateProposalExists();
+                }
+            }
+            unchecked { ++i; }
+        }
+
         // 注意：此处不校验余额。从创建到执行最多间隔7天，期间余额可能变化，
         // 余额充足性由 executeWithdrawProposal 在执行时校验。
 
@@ -2066,16 +2070,15 @@ contract ServerNodeV2Backup is
         uint256 proposalId
     ) external onlyWithdrawMultiSig {
         WithdrawProposal storage proposal = withdrawProposals[proposalId];
-        require(proposal.amount > 0, "Proposal does not exist");
-        require(!proposal.executed, "Proposal already executed");
-        // ✅ 检查提案是否过期
+        require(proposal.amount > 0, "No proposal");
+        require(!proposal.executed, "Executed");
         require(
             block.timestamp <= proposal.createdAt + PROPOSAL_EXPIRY_TIME,
             "Expired"
         );
         require(
             !withdrawalConfirmations[proposalId][msg.sender],
-            "Already confirmed"
+            "Confirmed"
         );
 
         withdrawalConfirmations[proposalId][msg.sender] = true;
@@ -2092,22 +2095,20 @@ contract ServerNodeV2Backup is
         uint256 proposalId
     ) external onlyWithdrawMultiSig nonReentrant {
         WithdrawProposal storage proposal = withdrawProposals[proposalId];
-        require(proposal.amount > 0, "Proposal does not exist");
-        require(!proposal.executed, "Proposal already executed");
-        // ✅ 检查提案是否过期
+        require(proposal.amount > 0, "No proposal");
+        require(!proposal.executed, "Executed");
         require(
             block.timestamp <= proposal.createdAt + PROPOSAL_EXPIRY_TIME,
             "Expired"
         );
         require(
             proposal.confirmations >= withdrawThreshold,
-            "Not enough confirms"
+            "No confirms"
         );
 
-        // 检查余额
         require(
             proposal.amount <= address(this).balance,
-            "Insufficient balance"
+            "No balance"
         );
 
         // 先更新状态再交互

@@ -248,6 +248,14 @@ contract ServerNodeV2Backup is
     error NoNodeSufficientCapacityForCombinedAllocation();
     error NodeIndexCorrupted(uint256 nodeId, uint256 expectedIndex, uint256 actualIndex);
     error CommodityMustDeallocateByIndex(); // 商品类型因可能跨节点拆分，必须通过 deallocateNodesByUserRecordIndex 按索引逐条撤销
+    error SignerHasPendingConfirmations(); // 签名者有未执行的已确认提案
+    error CannotRemoveSignerBelowThreshold(); // 无法移除签名者：低于阈值
+    error SignerNotFoundInArray(); // 签名者不在数组中
+    error InvalidSignerAddress(); // 无效的签名者地址
+    error SignerAlreadyExists(); // 签名者已存在
+    error ThresholdMustBePositive(); // 阈值必须大于0
+    error ThresholdExceedsSigners(); // 阈值超过签名者数量
+    error ThresholdMustBeGreaterThanOne(); // 阈值必须大于1
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -279,7 +287,7 @@ contract ServerNodeV2Backup is
         __Pausable_init();
         uint256 length = _withdrawSigners.length;
         require(length > 0, "Empty signers");
-        require(_withdrawThreshold > 1, "Threshold must be greater than 1 for security");
+        require(_withdrawThreshold > 1, "Threshold > 1");
         require(_withdrawThreshold <= length, "Threshold > signers");
 
         REWARD = _rewardCalculator;
@@ -1943,8 +1951,12 @@ contract ServerNodeV2Backup is
      * @param _signer 要添加的签名用户地址
      */
     function addWithdrawSigner(address _signer) external onlyOwner {
-        require(_signer != address(0), "Invalid signer");
-        require(!isWithdrawSigner[_signer], "Already signer");
+        if (_signer == address(0)) {
+            revert InvalidSignerAddress();
+        }
+        if (isWithdrawSigner[_signer]) {
+            revert SignerAlreadyExists();
+        }
         withdrawSigners.push(_signer);
         isWithdrawSigner[_signer] = true;
         emit WithdrawSignerAdded(_signer);
@@ -1953,6 +1965,7 @@ contract ServerNodeV2Backup is
     /**
      * @dev 移除多签用户
      * @param _signer 移除签名用户地址
+     * @notice 如果签名者有未执行的已确认提案，需要先执行或等待过期
      */
     function removeWithdrawSigner(address _signer) external onlyOwner {
         require(isWithdrawSigner[_signer], "not signer");
@@ -1960,13 +1973,23 @@ contract ServerNodeV2Backup is
         uint256 len = withdrawSigners.length;
 
         // ✅ 防止删除后签名者数量低于阈值（防止单签风险）
-        require(
-            len > withdrawThreshold,
-            "Cannot remove: would break threshold"
-        );
+        if (len <= withdrawThreshold) {
+            revert CannotRemoveSignerBelowThreshold();
+        }
 
+        // ✅ 防止移除有未执行已确认提案的签名者
+        // 检查最近100个提案（防止遍历所有提案导致gas过高）
+        uint256 start = nextWithdrawProposalId > 100 ? nextWithdrawProposalId - 100 : 0;
+        for (uint256 i = start; i < nextWithdrawProposalId; ) {
+            WithdrawProposal storage p = withdrawProposals[i];
+            if (p.amount > 0 && !p.executed && block.timestamp <= p.createdAt + PROPOSAL_EXPIRY_TIME && withdrawalConfirmations[i][_signer]) {
+                revert SignerHasPendingConfirmations();
+            }
+            unchecked { ++i; }
+        }
+
+        // 从签名者列表中移除
         bool found = false;
-
         for (uint i = 0; i < len; ) {
             if (withdrawSigners[i] == _signer) {
                 withdrawSigners[i] = withdrawSigners[len - 1];
@@ -1974,12 +1997,12 @@ contract ServerNodeV2Backup is
                 found = true;
                 break;
             }
-            unchecked {
-                ++i;
-            }
+            unchecked { ++i; }
         }
 
-        require(found, "Signer not found in array");
+        if (!found) {
+            revert SignerNotFoundInArray();
+        }
         delete isWithdrawSigner[_signer];
 
         emit WithdrawSignerRemoved(_signer);
@@ -1990,16 +2013,16 @@ contract ServerNodeV2Backup is
      * @param _newThreshold 新的阈值
      */
     function updateWithdrawThreshold(uint256 _newThreshold) external onlyOwner {
-        require(_newThreshold > 0, "Threshold > 0");
-        require(
-            _newThreshold <= withdrawSigners.length,
-            "Threshold exceeds signers count"
-        );
+        if (_newThreshold == 0) {
+            revert ThresholdMustBePositive();
+        }
+        if (_newThreshold > withdrawSigners.length) {
+            revert ThresholdExceedsSigners();
+        }
         // ✅ 防止阈值设置为 1（单签风险）
-        require(
-            _newThreshold > 1,
-            "Threshold must be greater than 1 for security"
-        );
+        if (_newThreshold <= 1) {
+            revert ThresholdMustBeGreaterThanOne();
+        }
 
         uint256 oldThreshold = withdrawThreshold;
         withdrawThreshold = _newThreshold;

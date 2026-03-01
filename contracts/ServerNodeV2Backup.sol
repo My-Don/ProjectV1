@@ -2207,6 +2207,10 @@ contract ServerNodeV2Backup is
         require(!withdrawalConfirmations[proposalId][msg.sender], "Confirmed");
 
         withdrawalConfirmations[proposalId][msg.sender] = true;
+        require(
+            proposal.confirmations < withdrawSigners.length,
+            "Confirmations overflow"
+        );
         proposal.confirmations++;
 
         emit WithdrawProposalConfirmed(proposalId, msg.sender);

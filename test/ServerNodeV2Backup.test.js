@@ -1289,7 +1289,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
           500000,  // ❌ 只取消50万（实际分配是100万）
           1
         )
-      ).to.be.revertedWith("Record not found");
+      ).to.be.revertedWithCustomError(serverNodeV2Backup, "RecordNotFound");
 
       // 验证标记仍然存在
       const isAllocatedAfter = await serverNodeV2Backup.isNodeAllocatedAsBig(1);
@@ -1495,7 +1495,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
           0,
           1000
         )
-      ).to.be.revertedWith("User allocation records limit reached");
+      ).to.be.revertedWithCustomError(serverNodeV2Backup, "AllocationRecordsLimitReached");
     });
 
     it("解除分配后应该可以继续分配", async function () {
@@ -1528,15 +1528,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
 
       // 获取第一条记录的信息
       const records = await serverNodeV2Backup.getUserAllocations(user2.address);
-      const firstRecord = records[0];
 
-      // 解除一次分配
-      await serverNodeV2Backup.connect(owner).deallocateNodes(
+      // 解除一次分配（商品类型 nodeType=4 必须使用 deallocateNodesByUserRecordIndex）
+      await serverNodeV2Backup.connect(owner).deallocateNodesByUserRecordIndex(
         user2.address,
-        firstRecord.stakeAddress,
-        firstRecord.nodeType,
-        firstRecord.amount,
-        firstRecord.nodeId
+        0  // 第一条记录的索引
       );
 
       // 验证记录数减少到 99
@@ -1917,19 +1913,25 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 创建提款提案（金额为1 ETH，但合约余额为0）
       const proposalAmount = ethers.parseEther("1");
 
-      // 注意：createWithdrawProposal 会检查余额，所以这个测试验证的是
-      // 创建提案时的余额检查机制
+      // createWithdrawProposal 不会检查余额，可以成功创建
+      await serverNodeV2Backup.connect(signer1).createWithdrawProposal(
+        proposalAmount,
+        user1.address
+      );
+
+      // 确认提案（proposalId 从 0 开始）
+      await serverNodeV2Backup.connect(signer2).confirmWithdrawProposal(0);
+      await serverNodeV2Backup.connect(signer3).confirmWithdrawProposal(0);
+
+      // 执行提案时应该因为余额不足而 revert
       await expect(
-        serverNodeV2Backup.connect(signer1).createWithdrawProposal(
-          proposalAmount,
-          user1.address
-        )
+        serverNodeV2Backup.connect(signer1).executeWithdrawProposal(0)
       ).to.be.revertedWith("Insufficient balance");
 
       // 这个测试验证了：
-      // 1. createWithdrawProposal 在创建时就检查余额（第一道防线）
-      // 2. executeWithdrawProposal 执行时也会检查余额（第二道防线）
-      // 两道防线确保不会出现余额不足的提款
+      // 1. createWithdrawProposal 在创建时不检查余额（允许创建）
+      // 2. executeWithdrawProposal 执行时会检查余额（第二道防线）
+      // 确保不会出现余额不足的提款
     });
 
     it("风险3：应该验证奖励完全分发（无黑洞）", async function () {

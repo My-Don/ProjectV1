@@ -123,7 +123,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
 
       await expect(
         serverNodeV2Backup.connect(owner).setWhiteList(user4.address, true)
-      ).to.be.revertedWith("Max whitelist");
+      ).to.be.revertedWith("Max list");
     });
 
     it("应该允许管理员移除白名单", async function () {
@@ -781,7 +781,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
     it("应该拒绝无效的节点分配参数", async function () {
       await expect(
         serverNodeV2Backup.connect(admin).allocateNodes(user1.address, admin.address, 0, 1, 0)
-      ).to.be.revertedWith("Invalid type");
+      ).to.be.revertedWith("Bad type");
     });
 
     it("应该拒绝超出容量的分配", async function () {
@@ -791,7 +791,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 再尝试分配应该失败
       await expect(
         serverNodeV2Backup.connect(admin).allocateNodes(user2.address, admin.address, 2, 1, 0)
-      ).to.be.revertedWith("Insufficient medium");
+      ).to.be.revertedWith("No medium");
     });
   });
 
@@ -1336,7 +1336,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // ✅ 修复后：尝试移除不在白名单中的用户应该 revert
       await expect(
         serverNodeV2Backup.connect(owner).setWhiteList(user, false)
-      ).to.be.revertedWith("Not in whitelist");
+      ).to.be.revertedWith("Not added");
     });
 
     it("重复移除白名单应该 revert", async function () {
@@ -1357,7 +1357,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // ✅ 修复后：再次移除应该 revert
       await expect(
         serverNodeV2Backup.connect(owner).setWhiteList(user1.address, false)
-      ).to.be.revertedWith("Not in whitelist");
+      ).to.be.revertedWith("Not added");
     });
 
     it("添加和移除白名单应该保持逻辑对称", async function () {
@@ -1366,12 +1366,12 @@ describe("ServerNodeV2Backup 完整测试", function () {
 
       await expect(
         serverNodeV2Backup.connect(owner).setWhiteList(user1.address, true)
-      ).to.be.revertedWith("Already whitelisted");
+      ).to.be.revertedWith("Added");
 
       // 测试移除不存在的白名单应该 revert
       await expect(
         serverNodeV2Backup.connect(owner).setWhiteList(user2.address, false)
-      ).to.be.revertedWith("Not in whitelist");
+      ).to.be.revertedWith("Not added");
 
       // ✅ 验证逻辑对称性：添加和移除都使用 require 进行检查
     });
@@ -1926,7 +1926,7 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 执行提案时应该因为余额不足而 revert
       await expect(
         serverNodeV2Backup.connect(signer1).executeWithdrawProposal(0)
-      ).to.be.revertedWith("Insufficient balance");
+      ).to.be.revertedWith("No balance");
 
       // 这个测试验证了：
       // 1. createWithdrawProposal 在创建时不检查余额（允许创建）

@@ -130,7 +130,25 @@ module.exports = {
           }
         }
       },
-    ]
+    ],
+    overrides: {
+      "contracts/ServerNodeV2Backup.sol": {
+        version: "0.8.20",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 1
+          },
+          viaIR: true,
+          metadata: {
+            bytecodeHash: "none"
+          },
+          debug: {
+            revertStrings: "strip"
+          }
+        }
+      }
+    }
   },
   networks: {
     hardhat: {

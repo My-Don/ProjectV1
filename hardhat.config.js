@@ -23,9 +23,25 @@ module.exports = {
         settings: {
           optimizer: {
             enabled: true,
-            runs: 200
+            runs: 1
           },
-          viaIR: true
+          viaIR: true,
+          metadata: {
+            bytecodeHash: "none"
+          }
+        }
+      },
+      {
+        version: "0.8.25",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 1
+          },
+          viaIR: true,
+          metadata: {
+            bytecodeHash: "none"
+          }
         }
       },
       {
@@ -43,9 +59,12 @@ module.exports = {
         settings: {
           optimizer: {
             enabled: true,
-            runs: 10000
+            runs: 1
           },
-          viaIR: true
+          viaIR: true,
+          metadata: {
+            bytecodeHash: "none"
+          }
         }
       },
       {

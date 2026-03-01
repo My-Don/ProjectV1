@@ -122,11 +122,19 @@ contract ServerNodeV2Backup is
         uint256 createdAt;
         uint256 confirmations;
         bool executed;
+        address proposer;
     }
     mapping(uint256 => WithdrawProposal) public withdrawProposals; // 提款提案
     mapping(uint256 => mapping(address => bool)) public withdrawalConfirmations; // 提款确认
+    mapping(uint256 => bool) public withdrawProposalFinalized; // 提案是否已完成结算（执行/过期）
+    mapping(address => uint256) public signerActiveProposalCount; // 每个签名者当前活跃提案数（创建维度）
 
+    uint256 public activeWithdrawProposalCount; // 当前活跃提案总数
+    uint256 public withdrawProposalCleanupCursor; // 过期清理游标（增量扫描）
     uint256 public constant PROPOSAL_EXPIRY_TIME = 7 days; // ✅ 提案过期时间
+    uint256 public constant MAX_ACTIVE_WITHDRAW_PROPOSALS = 200; // 活跃提案总量上限
+    uint256 public constant MAX_SIGNER_ACTIVE_WITHDRAW_PROPOSALS = 20; // 单签名者活跃提案上限
+    uint256 public constant EXPIRED_PROPOSAL_CLEANUP_STEPS = 120; // 单次过期清理扫描步数
 
     // ====== 控制开关 ======
     bool public pausedNodeAllocation; // 节点分配是否暂停
@@ -198,6 +206,8 @@ contract ServerNodeV2Backup is
         uint256 amount,
         address to
     );
+    event WithdrawProposalExpired(uint256 indexed proposalId);
+    event RewardUserSkipped(address indexed user, uint8 reason);
     event WithdrawMultiSigInitialized(address[] signers, uint256 threshold);
     event WithdrawThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
     event RewardCalculatorUpdated(
@@ -246,7 +256,11 @@ contract ServerNodeV2Backup is
     error NodeAllocationExceedsLimit();
     error InsufficientAllocatedAmountToDeallocate();
     error NoNodeSufficientCapacityForCombinedAllocation();
-    error NodeIndexCorrupted(uint256 nodeId, uint256 expectedIndex, uint256 actualIndex);
+    error NodeIndexCorrupted(
+        uint256 nodeId,
+        uint256 expectedIndex,
+        uint256 actualIndex
+    );
     error CommodityMustDeallocateByIndex(); // 商品类型因可能跨节点拆分，必须通过 deallocateNodesByUserRecordIndex 按索引逐条撤销
     error SignerHasPendingConfirmations(); // 签名者有未执行的已确认提案
     error CannotRemoveSignerBelowThreshold(); // 无法移除签名者：低于阈值
@@ -257,6 +271,8 @@ contract ServerNodeV2Backup is
     error ThresholdExceedsSigners(); // 阈值超过签名者数量
     error ThresholdMustBeGreaterThanOne(); // 阈值必须大于1
     error DuplicateProposalExists(); // 存在相同参数的未执行提案
+    error TooManyActiveWithdrawProposals(); // 活跃提案总数超限
+    error SignerActiveProposalLimitExceeded(); // 签名者活跃提案数超限
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -436,7 +452,8 @@ contract ServerNodeV2Backup is
                     isActive: _nodeInfo[i].isActive,
                     nodeStakeAddress: _nodeInfo[i].nodeStakeAddress,
                     id: newId,
-                    createTime: (_nodeInfo[i].createTime == 0 || _nodeInfo[i].createTime > block.timestamp)
+                    createTime: (_nodeInfo[i].createTime == 0 ||
+                        _nodeInfo[i].createTime > block.timestamp)
                         ? block.timestamp
                         : _nodeInfo[i].createTime
                 })
@@ -535,7 +552,7 @@ contract ServerNodeV2Backup is
         uint8 nodeType,
         uint256 amount,
         uint256 nodeId
-    ) external onlyOwner nonReentrant whenNotPaused {
+    ) external onlyOwner nonReentrant {
         // 检查参数
         if (user == address(0)) revert InvalidUser();
         if (stakeAddress == address(0)) revert InvalidStake();
@@ -585,7 +602,7 @@ contract ServerNodeV2Backup is
     function deallocateNodesByUserRecordIndex(
         address user,
         uint256 userRecordIndex
-    ) external onlyOwner nonReentrant whenNotPaused {
+    ) external onlyOwner nonReentrant {
         if (user == address(0)) revert InvalidUser();
         AllocationRecord[] storage userRecords = userAllocationRecords[user];
         if (userRecordIndex >= userRecords.length) revert IndexOutOfBounds();
@@ -1302,10 +1319,7 @@ contract ServerNodeV2Backup is
         uint256 nodeId
     ) public view returns (uint256) {
         require(nodeId > 0, "No ID");
-        require(
-            nodeIndexById[nodeId] < deployNode.length,
-            "No node"
-        );
+        require(nodeIndexById[nodeId] < deployNode.length, "No node");
         if (isNodeAllocatedAsBig[nodeId]) return 0; // 大节点已被完全分配
         return DEFAULT_CAPACITY - nodeTotalAllocated[nodeId];
     }
@@ -1319,10 +1333,7 @@ contract ServerNodeV2Backup is
         uint256 nodeId
     ) public view returns (uint256) {
         require(nodeId > 0, "No ID");
-        require(
-            nodeIndexById[nodeId] < deployNode.length,
-            "No node"
-        );
+        require(nodeIndexById[nodeId] < deployNode.length, "No node");
         return nodeTotalAllocated[nodeId];
     }
 
@@ -1498,9 +1509,17 @@ contract ServerNodeV2Backup is
             uint256 nodeId = record.nodeId;
 
             uint256 nodeIndex = nodeIndexById[nodeId];
-            if (nodeIndex >= deployNode.length || deployNode[nodeIndex].id != nodeId) {
+            if (nodeIndex >= deployNode.length) {
+                // 节点索引越界，说明数据损坏
+                revert NodeIndexCorrupted(nodeId, nodeIndex, type(uint256).max);
+            }
+            if (deployNode[nodeIndex].id != nodeId) {
                 // 节点索引不匹配，说明数据损坏
-                revert NodeIndexCorrupted(nodeId, nodeId, deployNode[nodeIndex].id);
+                revert NodeIndexCorrupted(
+                    nodeId,
+                    nodeIndex,
+                    deployNode[nodeIndex].id
+                );
             }
 
             // 统计 active 节点
@@ -1596,7 +1615,7 @@ contract ServerNodeV2Backup is
             uint256 dailyReward,
             uint16 currentYear,
             uint256 currentDay
-        ) = _getCurrentRewardInfo(); 
+        ) = _getCurrentRewardInfo();
         require(dailyReward > 0, "No reward");
 
         // ===== 2️⃣ 计算有效总等效值（只统计 active 节点）=====
@@ -1642,16 +1661,16 @@ contract ServerNodeV2Backup is
             }
 
             // ✅ 获取并缓存该用户 active 节点的等效值
-
-            (
-                ,
-                ,
+            try this.getStakeAddressesWithEquivalent(user) returns (
+                address[] memory,
+                uint256[] memory,
                 uint256 userActiveEquivalent
-            ) = getStakeAddressesWithEquivalent(user);
-
-            allTotalEquivalents[i] = userActiveEquivalent;
-
-            effectiveTotal += userActiveEquivalent;
+            ) {
+                allTotalEquivalents[i] = userActiveEquivalent;
+                effectiveTotal += userActiveEquivalent;
+            } catch {
+                emit RewardUserSkipped(user, 1);
+            }
 
             unchecked {
                 ++i;
@@ -1752,11 +1771,25 @@ contract ServerNodeV2Backup is
              * ✅ 重新计算质押拆分（避免缓存二维数组导致内存膨胀/批处理失败）
              */
 
-            (
-                address[] memory stakeAddresses,
-                uint256[] memory equivalents,
-                uint256 totalStakeEquivalent
-            ) = getStakeAddressesWithEquivalent(user);
+            address[] memory stakeAddresses;
+            uint256[] memory equivalents;
+            uint256 totalStakeEquivalent;
+
+            try this.getStakeAddressesWithEquivalent(user) returns (
+                address[] memory _stakeAddresses,
+                uint256[] memory _equivalents,
+                uint256 _totalStakeEquivalent
+            ) {
+                stakeAddresses = _stakeAddresses;
+                equivalents = _equivalents;
+                totalStakeEquivalent = _totalStakeEquivalent;
+            } catch {
+                emit RewardUserSkipped(user, 1);
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
 
             // 若没有任何 active 节点参与，直接跳过
             if (totalStakeEquivalent == 0) {
@@ -1962,6 +1995,8 @@ contract ServerNodeV2Backup is
     function removeWithdrawSigner(address _signer) external onlyOwner {
         require(isWithdrawSigner[_signer], "not signer");
 
+        cleanupExpiredProposals(EXPIRED_PROPOSAL_CLEANUP_STEPS);
+
         uint256 len = withdrawSigners.length;
 
         // ✅ 防止删除后签名者数量低于阈值（防止单签风险）
@@ -1969,15 +2004,25 @@ contract ServerNodeV2Backup is
             revert CannotRemoveSignerBelowThreshold();
         }
 
-        // ✅ 防止移除有未执行已确认提案的签名者
-        // 检查最近100个提案（防止遍历所有提案导致gas过高）
-        uint256 start = nextWithdrawProposalId > 100 ? nextWithdrawProposalId - 100 : 0;
-        for (uint256 i = start; i < nextWithdrawProposalId; ) {
+        // ✅ 防止移除有未执行且未过期提案确认的签名者
+        // 倒序仅扫描“未过期窗口”内提案，避免固定窗口漏检
+        for (uint256 i = nextWithdrawProposalId; i > 0; ) {
+            unchecked {
+                --i;
+            }
+
             WithdrawProposal storage p = withdrawProposals[i];
-            if (p.amount > 0 && !p.executed && block.timestamp <= p.createdAt + PROPOSAL_EXPIRY_TIME && withdrawalConfirmations[i][_signer]) {
+            if (p.amount == 0 || p.executed || withdrawProposalFinalized[i]) {
+                continue;
+            }
+
+            if (block.timestamp > p.createdAt + PROPOSAL_EXPIRY_TIME) {
+                break;
+            }
+
+            if (withdrawalConfirmations[i][_signer]) {
                 revert SignerHasPendingConfirmations();
             }
-            unchecked { ++i; }
         }
 
         // 从签名者列表中移除
@@ -1989,7 +2034,9 @@ contract ServerNodeV2Backup is
                 found = true;
                 break;
             }
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
 
         if (!found) {
@@ -2022,6 +2069,62 @@ contract ServerNodeV2Backup is
         emit WithdrawThresholdUpdated(oldThreshold, _newThreshold);
     }
 
+    function _finalizeWithdrawProposal(uint256 proposalId) internal {
+        if (withdrawProposalFinalized[proposalId]) return;
+
+        withdrawProposalFinalized[proposalId] = true;
+
+        if (activeWithdrawProposalCount > 0) {
+            activeWithdrawProposalCount -= 1;
+        }
+
+        address proposer = withdrawProposals[proposalId].proposer;
+        if (proposer != address(0) && signerActiveProposalCount[proposer] > 0) {
+            signerActiveProposalCount[proposer] -= 1;
+        }
+    }
+
+    function cleanupExpiredProposals(uint256 maxSteps) public {
+        require(maxSteps > 0, "maxSteps > 0");
+
+        uint256 proposalCount = nextWithdrawProposalId;
+        if (proposalCount == 0) {
+            withdrawProposalCleanupCursor = 0;
+            return;
+        }
+
+        uint256 cursor = withdrawProposalCleanupCursor;
+        if (cursor == 0 || cursor > proposalCount) {
+            cursor = proposalCount;
+        }
+
+        uint256 scanned = 0;
+        while (scanned < maxSteps) {
+            if (cursor == 0) {
+                cursor = proposalCount;
+            }
+
+            unchecked {
+                --cursor;
+                ++scanned;
+            }
+
+            WithdrawProposal storage p = withdrawProposals[cursor];
+            if (
+                p.amount == 0 || p.executed || withdrawProposalFinalized[cursor]
+            ) {
+                continue;
+            }
+
+            if (block.timestamp > p.createdAt + PROPOSAL_EXPIRY_TIME) {
+                _finalizeWithdrawProposal(cursor);
+                emit WithdrawProposalExpired(cursor);
+            }
+        }
+
+        withdrawProposalCleanupCursor = cursor;
+    }
+
     /**
      * @dev 创建提款提案
      * @param _amount 提款金额
@@ -2034,16 +2137,37 @@ contract ServerNodeV2Backup is
     ) external onlyWithdrawMultiSig returns (uint256) {
         require(_amount > 0, "Amount > 0");
         require(_to != address(0), "Invalid recipient");
-        
-        uint256 start = nextWithdrawProposalId > 50 ? nextWithdrawProposalId - 50 : 0;
-        for (uint256 i = start; i < nextWithdrawProposalId; ) {
-            WithdrawProposal storage p = withdrawProposals[i];
-            if (p.amount > 0 && !p.executed && p.amount == _amount && p.to == _to) {
-                if (block.timestamp <= p.createdAt + PROPOSAL_EXPIRY_TIME) {
-                    revert DuplicateProposalExists();
-                }
+
+        cleanupExpiredProposals(EXPIRED_PROPOSAL_CLEANUP_STEPS);
+
+        if (activeWithdrawProposalCount >= MAX_ACTIVE_WITHDRAW_PROPOSALS) {
+            revert TooManyActiveWithdrawProposals();
+        }
+        if (
+            signerActiveProposalCount[msg.sender] >=
+            MAX_SIGNER_ACTIVE_WITHDRAW_PROPOSALS
+        ) {
+            revert SignerActiveProposalLimitExceeded();
+        }
+
+        // 倒序仅扫描“未过期窗口”内提案
+        for (uint256 i = nextWithdrawProposalId; i > 0; ) {
+            unchecked {
+                --i;
             }
-            unchecked { ++i; }
+
+            WithdrawProposal storage p = withdrawProposals[i];
+            if (p.amount == 0 || p.executed || withdrawProposalFinalized[i]) {
+                continue;
+            }
+
+            if (block.timestamp > p.createdAt + PROPOSAL_EXPIRY_TIME) {
+                break;
+            }
+
+            if (p.amount == _amount && p.to == _to) {
+                revert DuplicateProposalExists();
+            }
         }
 
         // 注意：此处不校验余额。从创建到执行最多间隔7天，期间余额可能变化，
@@ -2055,8 +2179,12 @@ contract ServerNodeV2Backup is
             to: _to,
             createdAt: block.timestamp,
             confirmations: 0,
-            executed: false
+            executed: false,
+            proposer: msg.sender
         });
+
+        activeWithdrawProposalCount += 1;
+        signerActiveProposalCount[msg.sender] += 1;
 
         emit WithdrawProposalCreated(proposalId, _amount, _to);
         return proposalId;
@@ -2076,10 +2204,7 @@ contract ServerNodeV2Backup is
             block.timestamp <= proposal.createdAt + PROPOSAL_EXPIRY_TIME,
             "Expired"
         );
-        require(
-            !withdrawalConfirmations[proposalId][msg.sender],
-            "Confirmed"
-        );
+        require(!withdrawalConfirmations[proposalId][msg.sender], "Confirmed");
 
         withdrawalConfirmations[proposalId][msg.sender] = true;
         proposal.confirmations++;
@@ -2101,18 +2226,13 @@ contract ServerNodeV2Backup is
             block.timestamp <= proposal.createdAt + PROPOSAL_EXPIRY_TIME,
             "Expired"
         );
-        require(
-            proposal.confirmations >= withdrawThreshold,
-            "No confirms"
-        );
+        require(proposal.confirmations >= withdrawThreshold, "No confirms");
 
-        require(
-            proposal.amount <= address(this).balance,
-            "No balance"
-        );
+        require(proposal.amount <= address(this).balance, "No balance");
 
         // 先更新状态再交互
         proposal.executed = true;
+        _finalizeWithdrawProposal(proposalId);
 
         // 再转账
         TransferHelper.safeTransferETH(proposal.to, proposal.amount);
@@ -2150,8 +2270,26 @@ contract ServerNodeV2Backup is
     }
 
     /**
-     * @dev Storage gap for future upgrades
-     * ✅ 保留 50 个 slot 用于未来升级，防止 storage 冲突
+     * @dev 获取过期提案清理游标状态
+     * @return cursor 当前游标
+     * @return proposalCount 当前提案总数（nextWithdrawProposalId）
+     * @return activeCount 当前活跃提案数
      */
-    uint256[50] private __gap;
+    function getCleanupCursorState()
+        external
+        view
+        returns (uint256 cursor, uint256 proposalCount, uint256 activeCount)
+    {
+        return (
+            withdrawProposalCleanupCursor,
+            nextWithdrawProposalId,
+            activeWithdrawProposalCount
+        );
+    }
+
+    /**
+     * @dev Storage gap for future upgrades
+     * ✅ 保留 46 个 slot 用于未来升级，防止 storage 冲突
+     */
+    uint256[46] private __gap;
 }

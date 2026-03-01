@@ -39,12 +39,11 @@ contract ServerNodeV2Backup is
     uint16 public constant BASENODE = 500; // 基础节点数，用来算奖励
     uint8 public constant MAX_WHITELIST = 3; // 白名单最多3个人
     uint256 public constant DEFAULT_CAPACITY = 1_000_000; // 每个节点100万容量
-    uint256 public constant SECONDS_PER_DAY = 86400; // 一天多少秒
     uint256 private constant SCALE = 1e6; // 精度放大倍数，用来算等效值
 
     // 常量定义
     uint256 public constant MAX_BATCH_ALLOCATIONS = 20; // 批量分配最大数量
-    uint256 public constant MAX_REWARD_USERS = 30; // 奖励分发最大用户数
+    uint256 public constant MAX_REWARD_USERS = 20; // 奖励分发最大用户数
     uint256 public constant MAX_USER_ALLOCATIONS = 100; // 单个用户最大分配记录数
     uint256 public constant MEDIUM_NODE_AMOUNT = 200_000; // 中节点金额
     uint256 public constant SMALL_NODE_AMOUNT = 50_000; // 小节点金额
@@ -133,36 +132,6 @@ contract ServerNodeV2Backup is
     bool public pausedNodeAllocation; // 节点分配是否暂停
     bool public pausedNodeAllocationReward; // 节点分配奖励是否暂停
 
-    // 只有管理员或白名单才能分配节点
-    modifier onlyAllocationAuthorized() {
-        require(
-            msg.sender == owner() || whiteList[msg.sender],
-            "Only owner or whitelist"
-        );
-        _;
-    }
-
-    // 节点分配没暂停时才能调用
-    modifier whenAllocationNotPaused() {
-        require(!pausedNodeAllocation, "Allocation paused");
-        _;
-    }
-
-    // 节点分配奖励没暂停时才能调用
-    modifier whenNodeAllocationRewardNotPaused() {
-        require(
-            !pausedNodeAllocationReward,
-            "Node allocation reward is paused"
-        );
-        _;
-    }
-
-    // 只有多签用户才能调用
-    modifier onlyWithdrawMultiSig() {
-        require(isWithdrawSigner[msg.sender], "Not signer");
-        _;
-    }
-
     // ====== 事件 ======
     event CreateNodeInfo(
         string indexed ip,
@@ -236,6 +205,50 @@ contract ServerNodeV2Backup is
         address indexed newCalculator
     );
 
+    // 只有管理员或白名单才能分配节点
+    modifier onlyAllocationAuthorized() {
+        require(
+            msg.sender == owner() || whiteList[msg.sender],
+            "Only owner or whitelist"
+        );
+        _;
+    }
+
+    // 节点分配没暂停时才能调用
+    modifier whenAllocationNotPaused() {
+        require(!pausedNodeAllocation, "Allocation paused");
+        _;
+    }
+
+    // 节点分配奖励没暂停时才能调用
+    modifier whenNodeAllocationRewardNotPaused() {
+        require(
+            !pausedNodeAllocationReward,
+            "Node allocation reward is paused"
+        );
+        _;
+    }
+
+    // 只有多签用户才能调用
+    modifier onlyWithdrawMultiSig() {
+        require(isWithdrawSigner[msg.sender], "Not signer");
+        _;
+    }
+
+    error InvalidUser();
+    error InvalidStake();
+    error InvalidNodeId();
+    error IndexOutOfBounds();
+    error RecordNotFound();
+    error RewardCallFailed();
+    error InvalidData();
+    error AllocationRecordsLimitReached();
+    error NodeAllocationExceedsLimit();
+    error InsufficientAllocatedAmountToDeallocate();
+    error NoNodeSufficientCapacityForCombinedAllocation();
+    error NodeIndexCorrupted(uint256 nodeId, uint256 expectedIndex, uint256 actualIndex);
+    error CommodityMustDeallocateByIndex(); // 商品类型因可能跨节点拆分，必须通过 deallocateNodesByUserRecordIndex 按索引逐条撤销
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -254,19 +267,19 @@ contract ServerNodeV2Backup is
         address[] calldata _withdrawSigners,
         uint256 _withdrawThreshold
     ) public initializer {
-        __Ownable_init(_owner);
-        __ReentrancyGuard_init();
-        __Pausable_init();
-
         require(_owner != address(0), "Zero owner");
         require(
             _rewardCalculator != address(0) &&
                 _rewardCalculator.code.length > 0,
             "Invalid reward"
         );
+
+        __Ownable_init(_owner);
+        __ReentrancyGuard_init();
+        __Pausable_init();
         uint256 length = _withdrawSigners.length;
         require(length > 0, "Empty signers");
-        require(_withdrawThreshold > 0, "Threshold > 0");
+        require(_withdrawThreshold > 1, "Threshold must be greater than 1 for security");
         require(_withdrawThreshold <= length, "Threshold > signers");
 
         REWARD = _rewardCalculator;
@@ -309,14 +322,22 @@ contract ServerNodeV2Backup is
             abi.encodeWithSignature("getDaysSinceDeployment()")
         );
 
-        require(success, "Reward call failed");
-        require(data.length >= 32, "Invalid data");
+        if (!success) revert RewardCallFailed();
+        if (data.length < 32) revert InvalidData();
 
         // 尝试解码返回值
         uint256 currentDay = abi.decode(data, (uint256));
 
         // 验证返回值的合理性
         require(currentDay > 0, "Invalid currentDay");
+
+        // 尝试调用 getDailyReward(uint256)
+        (bool successReward, bytes memory dataReward) = _rewardCalculator
+            .staticcall(
+                abi.encodeWithSignature("getDailyReward(uint256)", currentDay)
+            );
+        if (!successReward) revert RewardCallFailed();
+        if (dataReward.length < 32) revert InvalidData();
     }
 
     /**
@@ -393,7 +414,6 @@ contract ServerNodeV2Backup is
             );
 
             // 2. 所有节点容量固定为100万
-            uint256 capacity = DEFAULT_CAPACITY;
 
             // 生成新的节点ID
             _counter.increment();
@@ -407,7 +427,7 @@ contract ServerNodeV2Backup is
                     isActive: _nodeInfo[i].isActive,
                     nodeStakeAddress: _nodeInfo[i].nodeStakeAddress,
                     id: newId,
-                    createTime: _nodeInfo[i].createTime == 0
+                    createTime: (_nodeInfo[i].createTime == 0 || _nodeInfo[i].createTime > block.timestamp)
                         ? block.timestamp
                         : _nodeInfo[i].createTime
                 })
@@ -429,7 +449,7 @@ contract ServerNodeV2Backup is
                 _nodeInfo[i].isActive,
                 _nodeInfo[i].nodeStakeAddress,
                 newId,
-                capacity
+                DEFAULT_CAPACITY
             );
 
             unchecked {
@@ -508,21 +528,24 @@ contract ServerNodeV2Backup is
         uint256 nodeId
     ) external onlyOwner nonReentrant whenNotPaused {
         // 检查参数
-        require(user != address(0), "Invalid user");
-        require(stakeAddress != address(0), "Invalid stake");
-        require(nodeId > 0, "Invalid node ID");
+        if (user == address(0)) revert InvalidUser();
+        if (stakeAddress == address(0)) revert InvalidStake();
+        if (nodeId == 0) revert InvalidNodeId();
         require(amount > 0, "Invalid amount");
+        // 商品分配（type 4）可能被跨节点拆分为多条部分金额记录，
+        // 按 amount 精确匹配无法定位，必须通过 deallocateNodesByUserRecordIndex 按索引逐条撤销
+        if (nodeType == 4) revert CommodityMustDeallocateByIndex();
 
         // 检查节点是否存在
         uint256 index = nodeIndexById[nodeId];
         require(index < deployNode.length, "Node not exist");
         require(deployNode[index].id == nodeId, "Node ID mismatch");
 
-        // 从用户分配记录中移除
+        // 通过用户记录定位并撤销（更稳，避免 nodeRecords 侧匹配不一致）
         AllocationRecord[] storage userRecords = userAllocationRecords[user];
         bool found = false;
         uint256 userRecordsLength = userRecords.length;
-        for (uint i = 0; i < userRecordsLength; ) {
+        for (uint256 i = 0; i < userRecordsLength; ) {
             AllocationRecord storage record = userRecords[i];
             if (
                 record.stakeAddress == stakeAddress &&
@@ -530,9 +553,8 @@ contract ServerNodeV2Backup is
                 record.amount == amount &&
                 record.nodeId == nodeId
             ) {
-                // 移除记录
-                userRecords[i] = userRecords[userRecords.length - 1];
-                userRecords.pop();
+                AllocationRecord memory recordCopy = record;
+                _deallocateUserRecordByIndex(user, i, recordCopy);
                 found = true;
                 break;
             }
@@ -540,21 +562,64 @@ contract ServerNodeV2Backup is
                 ++i;
             }
         }
-        require(found, "Record not found");
+        if (!found) revert RecordNotFound();
 
-        // 从节点分配记录中移除
-        AllocationRecord[] storage nodeRecords = nodeAllocationRecords[nodeId];
+        // 触发取消分配事件
+        emit NodeDeallocated(user, stakeAddress, nodeType, amount, nodeId);
+    }
+
+    /**
+     * @dev 通过用户分配记录索引撤销分配（更稳的撤销方式）
+     * @param user 用户地址
+     * @param userRecordIndex 用户分配记录数组下标
+     */
+    function deallocateNodesByUserRecordIndex(
+        address user,
+        uint256 userRecordIndex
+    ) external onlyOwner nonReentrant whenNotPaused {
+        if (user == address(0)) revert InvalidUser();
+        AllocationRecord[] storage userRecords = userAllocationRecords[user];
+        if (userRecordIndex >= userRecords.length) revert IndexOutOfBounds();
+
+        AllocationRecord memory recordCopy = userRecords[userRecordIndex];
+        _deallocateUserRecordByIndex(user, userRecordIndex, recordCopy);
+
+        emit NodeDeallocated(
+            user,
+            recordCopy.stakeAddress,
+            recordCopy.nodeType,
+            recordCopy.amount,
+            recordCopy.nodeId
+        );
+    }
+
+    function _deallocateUserRecordByIndex(
+        address user,
+        uint256 userRecordIndex,
+        AllocationRecord memory record
+    ) internal {
+        // 1) 从用户分配记录中移除
+        AllocationRecord[] storage userRecords = userAllocationRecords[user];
+        if (userRecordIndex >= userRecords.length) revert IndexOutOfBounds();
+        userRecords[userRecordIndex] = userRecords[userRecords.length - 1];
+        userRecords.pop();
+
+        // 2) 从节点分配记录中移除（用更严格的字段匹配，避免误删）
+        AllocationRecord[] storage nodeRecords = nodeAllocationRecords[
+            record.nodeId
+        ];
         bool nodeRecordFound = false;
         uint256 nodeRecordsLength = nodeRecords.length;
-        for (uint i = 0; i < nodeRecordsLength; ) {
-            AllocationRecord storage record = nodeRecords[i];
+        for (uint256 i = 0; i < nodeRecordsLength; ) {
+            AllocationRecord storage nr = nodeRecords[i];
             if (
-                record.user == user &&
-                record.stakeAddress == stakeAddress &&
-                record.nodeType == nodeType &&
-                record.amount == amount
+                nr.timestamp == record.timestamp &&
+                nr.user == record.user &&
+                nr.stakeAddress == record.stakeAddress &&
+                nr.nodeType == record.nodeType &&
+                nr.amount == record.amount &&
+                nr.nodeId == record.nodeId
             ) {
-                // 移除记录
                 nodeRecords[i] = nodeRecords[nodeRecords.length - 1];
                 nodeRecords.pop();
                 nodeRecordFound = true;
@@ -564,27 +629,31 @@ contract ServerNodeV2Backup is
                 ++i;
             }
         }
-        require(nodeRecordFound, "Record not found");
+        if (!nodeRecordFound) revert RecordNotFound();
 
-        // 更新节点累计分配金额
-        require(
-            nodeTotalAllocated[nodeId] >= amount,
-            "Insufficient allocated amount to deallocate"
-        );
-        nodeTotalAllocated[nodeId] -= amount;
+        // 3) 更新节点累计分配金额
+        if (nodeTotalAllocated[record.nodeId] < record.amount) {
+            revert InsufficientAllocatedAmountToDeallocate();
+        }
+        nodeTotalAllocated[record.nodeId] -= record.amount;
 
         // 如果节点分配金额归零，重置大节点标记
-        if (nodeTotalAllocated[nodeId] == 0) {
-            isNodeAllocatedAsBig[nodeId] = false;
+        if (nodeTotalAllocated[record.nodeId] == 0) {
+            isNodeAllocatedAsBig[record.nodeId] = false;
         }
 
-        /* 等效值回滚 */
-        uint256 equivalent = (amount * SCALE) / DEFAULT_CAPACITY;
+        // 4) 回滚等效值
+        uint256 equivalent = (record.amount * SCALE) / DEFAULT_CAPACITY;
+        require(
+            userPhysicalNodesEquivalent[user] >= equivalent,
+            "User equivalent underflow"
+        );
+        require(
+            totalPhysicalNodesEquivalent >= equivalent,
+            "Total equivalent underflow"
+        );
         userPhysicalNodesEquivalent[user] -= equivalent;
         totalPhysicalNodesEquivalent -= equivalent;
-
-        // 触发取消分配事件
-        emit NodeDeallocated(user, stakeAddress, nodeType, amount, nodeId);
     }
 
     /**
@@ -680,10 +749,7 @@ contract ServerNodeV2Backup is
 
             // 1️⃣ 防止 nodeId / index 错位
             if (nodeIndexById[nodeId] != i) {
-                unchecked {
-                    ++i;
-                }
-                continue;
+                revert NodeIndexCorrupted(nodeId, nodeIndexById[nodeId], i);
             }
             // 2️⃣ 节点必须处于 active 状态
             if (!node.isActive) {
@@ -697,10 +763,7 @@ contract ServerNodeV2Backup is
             if (
                 !isNodeAllocatedAsBig[nodeId] && nodeTotalAllocated[nodeId] == 0 // 没被分配过大节点并且没分配过任何金额
             ) {
-                // 标记为大节点
-                isNodeAllocatedAsBig[nodeId] = true;
-
-                // 记录分配（内部会更新nodeTotalAllocated）
+                // 先记录分配（内部校验通过后再标记，避免 revert 时语义混乱）
                 _recordAllocation(
                     user,
                     stakeAddress,
@@ -708,6 +771,9 @@ contract ServerNodeV2Backup is
                     DEFAULT_CAPACITY,
                     nodeId
                 );
+
+                // 记录成功后再标记为大节点
+                isNodeAllocatedAsBig[nodeId] = true;
 
                 unchecked {
                     ++allocated;
@@ -750,10 +816,7 @@ contract ServerNodeV2Backup is
 
             // 跳过非活动节点
             if (nodeIndexById[nodeId] != i) {
-                unchecked {
-                    ++i;
-                }
-                continue;
+                revert NodeIndexCorrupted(nodeId, nodeIndexById[nodeId], i);
             }
             if (!deployNode[i].isActive) {
                 unchecked {
@@ -825,10 +888,7 @@ contract ServerNodeV2Backup is
 
             // 跳过非活动节点
             if (nodeIndexById[nodeId] != i) {
-                unchecked {
-                    ++i;
-                }
-                continue;
+                revert NodeIndexCorrupted(nodeId, nodeIndexById[nodeId], i);
             }
             if (!deployNode[i].isActive) {
                 unchecked {
@@ -895,10 +955,7 @@ contract ServerNodeV2Backup is
 
             // 跳过非活动节点
             if (nodeIndexById[nodeId] != i) {
-                unchecked {
-                    ++i;
-                }
-                continue;
+                revert NodeIndexCorrupted(nodeId, nodeIndexById[nodeId], i);
             }
             if (!deployNode[i].isActive) {
                 unchecked {
@@ -1027,10 +1084,7 @@ contract ServerNodeV2Backup is
 
             // 跳过非活动节点
             if (nodeIndexById[nodeId] != i) {
-                unchecked {
-                    ++i;
-                }
-                continue;
+                revert NodeIndexCorrupted(nodeId, nodeIndexById[nodeId], i);
             }
             if (!deployNode[i].isActive) {
                 unchecked {
@@ -1056,10 +1110,7 @@ contract ServerNodeV2Backup is
         }
 
         // 必须找到有足够容量的节点
-        require(
-            found,
-            "No node has sufficient capacity for combined allocation"
-        );
+        if (!found) revert NoNodeSufficientCapacityForCombinedAllocation();
 
         // 2. 在找到的节点内依次分配
         // 分配中节点（每个20万）
@@ -1124,17 +1175,13 @@ contract ServerNodeV2Backup is
         uint256 nodeId
     ) internal {
         // 限制单个用户的最大分配记录数
-        require(
-            userAllocationRecords[user].length < MAX_USER_ALLOCATIONS,
-            "User allocation records limit reached"
-        );
+        if (userAllocationRecords[user].length >= MAX_USER_ALLOCATIONS) {
+            revert AllocationRecordsLimitReached();
+        }
 
         // 确保一个节点的所有分配加起来不超过100万
         uint256 newTotal = nodeTotalAllocated[nodeId] + amount;
-        require(
-            newTotal <= DEFAULT_CAPACITY,
-            "Node total allocation exceeds 1,000,000 limit"
-        );
+        if (newTotal > DEFAULT_CAPACITY) revert NodeAllocationExceedsLimit();
 
         // 更新节点累计分配金额
         nodeTotalAllocated[nodeId] = newTotal;
@@ -1173,7 +1220,7 @@ contract ServerNodeV2Backup is
             len = MAX_USER_ALLOCATIONS;
         }
 
-        address[] memory tempAddresses = new address[](50);
+        address[] memory tempAddresses = new address[](len);
         uint256 uniqueCount = 0;
 
         for (uint256 i = 0; i < len; ) {
@@ -1190,7 +1237,7 @@ contract ServerNodeV2Backup is
                 }
             }
 
-            if (!found && uniqueCount < 50) {
+            if (!found) {
                 tempAddresses[uniqueCount] = stakeAddr;
                 unchecked {
                     ++uniqueCount;
@@ -1364,7 +1411,8 @@ contract ServerNodeV2Backup is
                 unchecked {
                     ++bigNodes;
                 }
-            } else {
+            } else if (node.isActive) {
+                // 只统计活动节点的剩余容量，非活动节点不可分配，不应计入
                 uint256 remaining = DEFAULT_CAPACITY -
                     nodeTotalAllocated[node.id];
                 totalRemainingCapacity += remaining;
@@ -1489,8 +1537,7 @@ contract ServerNodeV2Backup is
             }
 
             if (!found) {
-                // ⚠️ 如果超过数组长度，revert（避免统计偏差）
-                require(uniqueCount < len, "Too many addresses");
+                // uniqueCount 不可能超过 len（唯一地址数 ≤ 分配记录数），此处直接赋值安全
                 tempAddresses[uniqueCount] = stakeAddr;
                 tempEquivalents[uniqueCount] = equivalent;
                 unchecked {
@@ -1520,20 +1567,13 @@ contract ServerNodeV2Backup is
     // ==================== 奖励分发功能 ====================
 
     function _safeRewardTransfer(address to, uint256 amount) internal {
-        if (to == address(0)) return;
-        if (amount == 0) return;
-
-        uint256 balance = address(this).balance;
-        if (amount > balance) {
-            amount = balance;
-        }
-
+        if (to == address(0) || amount == 0) return;
         TransferHelper.safeTransferETH(to, amount);
     }
 
     /**
      * @dev 分发奖励给用户
-     * @param _users 用户地址数组（最多30个）
+     * @param _users 用户地址数组（最多20个，受 MAX_REWARD_USERS 限制）
      * 要求：1.每人每天只能领一次 2.奖励按等效值比例分配 3.50%给用户，50%给质押地址
      */
     function configRewards(
@@ -1556,15 +1596,13 @@ contract ServerNodeV2Backup is
             uint256 dailyReward,
             uint16 currentYear,
             uint256 currentDay
-        ) = _getCurrentRewardInfo(); // ✅ 使用内部版本（有副作用）
+        ) = _getCurrentRewardInfo(); 
         require(dailyReward > 0, "Daily reward is zero");
 
         // ===== 2️⃣ 计算有效总等效值（只统计 active 节点）=====
         uint256 effectiveTotal = 0;
 
-        // ✅ 缓存每个用户的质押信息，避免重复计算
-        address[][] memory allStakeAddresses = new address[][](length);
-        uint256[][] memory allEquivalents = new uint256[][](length);
+        // ✅ 只缓存每个用户的 active 等效值，降低内存占用（更稳）
         uint256[] memory allTotalEquivalents = new uint256[](length);
 
         // 先计算所有用户的 active 节点总等效值
@@ -1585,15 +1623,32 @@ contract ServerNodeV2Backup is
                 continue;
             }
 
+            // ✅ 去重：检查同一批次内是否已经处理过该地址，防止 effectiveTotal 被重复累加
+            bool isDuplicate = false;
+            for (uint256 k = 0; k < i; ) {
+                if (_users[k] == user) {
+                    isDuplicate = true;
+                    break;
+                }
+                unchecked {
+                    ++k;
+                }
+            }
+            if (isDuplicate) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+
             // ✅ 获取并缓存该用户 active 节点的等效值
+
             (
-                address[] memory stakeAddresses,
-                uint256[] memory equivalents,
+                ,
+                ,
                 uint256 userActiveEquivalent
             ) = getStakeAddressesWithEquivalent(user);
 
-            allStakeAddresses[i] = stakeAddresses;
-            allEquivalents[i] = equivalents;
             allTotalEquivalents[i] = userActiveEquivalent;
 
             effectiveTotal += userActiveEquivalent;
@@ -1694,11 +1749,14 @@ contract ServerNodeV2Backup is
             }
 
             /**
-             * ✅ 使用缓存的质押等效值，避免重复计算
+             * ✅ 重新计算质押拆分（避免缓存二维数组导致内存膨胀/批处理失败）
              */
-            address[] memory stakeAddresses = allStakeAddresses[i];
-            uint256[] memory equivalents = allEquivalents[i];
-            uint256 totalStakeEquivalent = allTotalEquivalents[i];
+
+            (
+                address[] memory stakeAddresses,
+                uint256[] memory equivalents,
+                uint256 totalStakeEquivalent
+            ) = getStakeAddressesWithEquivalent(user);
 
             // 若没有任何 active 节点参与，直接跳过
             if (totalStakeEquivalent == 0) {
@@ -1782,15 +1840,17 @@ contract ServerNodeV2Backup is
         // 调用内部 view 函数获取数据
         (dailyReward, currentYear, currentDay) = _getCurrentRewardInfoView();
 
-        // ✅ 防止 currentDay 倒退（重复领取攻击）
+        // ✅ 防止 currentDay 倒退（重复领取攻击），只在天数增加时才写入，减少不必要的 SSTORE
         require(currentDay >= lastGlobalRewardDay, "Day decrease");
-        lastGlobalRewardDay = currentDay;
+        if (currentDay > lastGlobalRewardDay) {
+            lastGlobalRewardDay = currentDay;
+        }
 
         return (dailyReward, currentYear, currentDay);
     }
 
     /**
-     * @dev 获取当前奖励信息（内部 view 版本）
+     * @dev 获取当前奖励信息
      * @return dailyReward 每日奖励金额
      * @return currentYear 当前年份
      * @return currentDay 当前天数
@@ -1800,7 +1860,7 @@ contract ServerNodeV2Backup is
         view
         returns (uint256 dailyReward, uint16 currentYear, uint256 currentDay)
     {
-        // ✅ 先获取当前天数（view 函数）
+        // ✅ 先获取当前天数
         (bool successDay, bytes memory dataDay) = REWARD.staticcall(
             abi.encodeWithSignature("getDaysSinceDeployment()")
         );
@@ -1820,14 +1880,16 @@ contract ServerNodeV2Backup is
         dailyReward = abi.decode(dataReward, (uint256));
 
         // ✅ 计算当前年份（假设每年365天）
-        currentYear = uint16(((currentDay - 1) / 365) + 1);
-        require(currentYear <= type(uint16).max, "Year overflow");
+        // 先用 uint256 计算，校验后再强转，避免截断后检查形同虚设
+        uint256 yearRaw = ((currentDay - 1) / 365) + 1;
+        require(yearRaw <= type(uint16).max, "Year overflow");
+        currentYear = uint16(yearRaw);
 
         return (dailyReward, currentYear, currentDay);
     }
 
     /**
-     * @dev 获取当前奖励信息（只读版本，无副作用）
+     * @dev 获取当前奖励信息
      * @return dailyReward 每日奖励金额
      * @return currentYear 当前年份
      * @return currentDay 当前天数
@@ -1957,7 +2019,8 @@ contract ServerNodeV2Backup is
     ) external onlyWithdrawMultiSig returns (uint256) {
         require(_amount > 0, "Amount > 0");
         require(_to != address(0), "Invalid recipient");
-        require(_amount <= address(this).balance, "Insufficient balance");
+        // 注意：此处不校验余额。从创建到执行最多间隔7天，期间余额可能变化，
+        // 余额充足性由 executeWithdrawProposal 在执行时校验。
 
         uint256 proposalId = nextWithdrawProposalId++;
         withdrawProposals[proposalId] = WithdrawProposal({
@@ -2024,11 +2087,11 @@ contract ServerNodeV2Backup is
             "Insufficient balance"
         );
 
-        // 先转账
-        TransferHelper.safeTransferETH(proposal.to, proposal.amount);
-
-        // 转账成功后标记为已执行
+        // 先更新状态再交互
         proposal.executed = true;
+
+        // 再转账
+        TransferHelper.safeTransferETH(proposal.to, proposal.amount);
 
         emit WithdrawProposalExecuted(proposalId, proposal.amount, proposal.to);
     }

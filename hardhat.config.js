@@ -14,6 +14,8 @@ task("accounts", "Prints the list of accounts", async (taskArgs, hre) => {
   }
 });
 
+
+
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
   solidity: {
@@ -131,6 +133,12 @@ module.exports = {
         }
       },
     ],
+    /** overrides 的具体作用
+    * optimizer.runs: 1：优先减小 bytecode（牺牲部分运行时 gas）
+    * viaIR: true：很多复杂合约能进一步压缩体积
+    * metadata.bytecodeHash: "none"：去掉元数据哈希，减少字节码长度
+    * debug.revertStrings: "strip"：移除 revert 字符串，显著减小体积（但测试里就拿不到 reason 文本）
+    */
     overrides: {
       "contracts/ServerNodeV2Backup.sol": {
         version: "0.8.20",

@@ -27,6 +27,7 @@ library Counters {
  * @title 服务器节点管理合约
  * @notice 管理节点创建、分配节点、奖励分发、暂停节点、白名单、多签等所有功能
  * @dev 可升级，确保安全可靠
+ * 示例 https://sepolia.etherscan.io/tx/0x25ff67a6d5ff1c8d46fed4c912694d2f1a67a7fef1d02db3d8fae1d52b76ff30
  */
 contract ServerNodeV2Backup is
     Initializable,

@@ -198,27 +198,27 @@ module.exports = {
     monadTestnet: {
       url: process.env.MONAD_TESTNET_RPC_URL || "",
       accounts: getAccountsFromEnv("PRIVATE_KEY"),
-      chainId: parseInt(process.env.MONAD_TESTNET_CHAIN_ID) || 0
+      chainId: parseInt(process.env.MONAD_TESTNET_CHAIN_ID) || 10143
     },
     monadMainnet: {
       url: process.env.MONAD_MAINNET_RPC_URL || "",
       accounts: getAccountsFromEnv("PRIVATE_KEY"),
-      chainId: parseInt(process.env.MONAD_MAINNET_CHAIN_ID) || 0
+      chainId: parseInt(process.env.MONAD_MAINNET_CHAIN_ID) || 143
     },
     beechainMainnet: {
       url: process.env.BEE_MAINNET_RPC_URL || "",
       accounts: getAccountsFromEnv("PRIVATE_KEY"),
-      chainId: parseInt(process.env.BEE_MAINNET_CHAIN_ID) || 0
+      chainId: parseInt(process.env.BEE_MAINNET_CHAIN_ID) || 3188
     },
     arbitrumSepolia: {
       url: process.env.ARB_SEPOLIA_RPC_URL || "",
       accounts: getAccountsFromEnv("PRIVATE_KEY"),
-      chainId: parseInt(process.env.ARB_SEPOLIA_CHAIN_ID) || 0
+      chainId: parseInt(process.env.ARB_SEPOLIA_CHAIN_ID) || 421614
     },
     baseSepolia: {
       url: process.env.BASE_SEPOLIA_RPC_URL || "",
       accounts: getAccountsFromEnv("PRIVATE_KEY"),
-      chainId: parseInt(process.env.BASE_SEPOLIA_CHIAN_ID) || 0
+      chainId: parseInt(process.env.BASE_SEPOLIA_CHIAN_ID) || 84532
     },
   },
   etherscan: {

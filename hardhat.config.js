@@ -4,6 +4,13 @@ require("solidity-coverage");
 require("dotenv").config();
 require("hardhat-contract-sizer");
 
+function getAccountsFromEnv(envKey) {
+  const rawKey = process.env[envKey] || "";
+  if (!rawKey) return [];
+  const normalized = rawKey.startsWith("0x") ? rawKey : `0x${rawKey}`;
+  if (normalized.length !== 66) return [];
+  return [normalized];
+}
 
 // 配置hardhat accounts参数
 task("accounts", "Prints the list of accounts", async (taskArgs, hre) => {
@@ -164,53 +171,53 @@ module.exports = {
     },
     mainnet: {
       url: process.env.MAINNET_RPC_URL || "",
-      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
       chainId: parseInt(process.env.MAINNET_CHIAN_ID) || 1
     },
     sepolia: {
       url: process.env.SEPOLIA_RPC_URL || "",
-      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
       chainId: parseInt(process.env.SEPOLIA_CHAIN_ID) || 11155111,
       timeout: 120000,
       gasPrice: "auto"
     },
     bscTestnet: {
       url: process.env.BSC_TESTNET_RPC_URL || "",
-      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
       chainId: parseInt(process.env.BSC_TESTNET_CHAIN_ID) || 97
     },
     bsc: {
       url: process.env.BSC_MAINNET_RPC_URL || "",
-      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
       chainId: parseInt(process.env.BSC_MAINNET_CHAIN_ID) || 56
     },
     local: {
       url: process.env.LOCAL_RPC_URL || "",
-      accounts: process.env.LOCAL_PRIVATE_KEY && process.env.LOCAL_PRIVATE_KEY.length === 66 ? [process.env.LOCAL_PRIVATE_KEY] : []
+      accounts: getAccountsFromEnv("LOCAL_PRIVATE_KEY")
     },
     monadTestnet: {
       url: process.env.MONAD_TESTNET_RPC_URL || "",
-      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
       chainId: parseInt(process.env.MONAD_TESTNET_CHAIN_ID) || 0
     },
     monadMainnet: {
       url: process.env.MONAD_MAINNET_RPC_URL || "",
-      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
       chainId: parseInt(process.env.MONAD_MAINNET_CHAIN_ID) || 0
     },
     beechainMainnet: {
       url: process.env.BEE_MAINNET_RPC_URL || "",
-      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
       chainId: parseInt(process.env.BEE_MAINNET_CHAIN_ID) || 0
     },
     arbitrumSepolia: {
       url: process.env.ARB_SEPOLIA_RPC_URL || "",
-      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
       chainId: parseInt(process.env.ARB_SEPOLIA_CHAIN_ID) || 0
     },
     baseSepolia: {
       url: process.env.BASE_SEPOLIA_RPC_URL || "",
-      accounts: process.env.PRIVATE_KEY && process.env.PRIVATE_KEY.length === 66 ? [process.env.PRIVATE_KEY] : [],
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
       chainId: parseInt(process.env.BASE_SEPOLIA_CHIAN_ID) || 0
     },
   },

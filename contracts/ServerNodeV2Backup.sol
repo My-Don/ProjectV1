@@ -2367,14 +2367,13 @@ contract ServerNodeV2Backup is
             cursor = proposalCount;
         }
 
-        // ✅ Bug 1 修复：记录起始位置，检测是否完成一整圈扫描
-        // 注意：先判零重置，再递减，确保访问范围是 N-1 到 0
-        uint256 startCursor = cursor;
-        bool completedFullCycle = false;
+        // ✅ 记录扫描过的提案数量，用于检测是否完成一整圈
+        // 当 scanned >= proposalCount 时，说明已经扫描了所有提案
+        uint256 totalScanned = 0;
 
         uint256 scanned = 0;
-        while (scanned < maxSteps && !completedFullCycle) {
-            // ✅ Bug 1 修复：先判零重置，再递减
+        while (scanned < maxSteps && totalScanned < proposalCount) {
+            // ✅ 先判零重置，再递减
             // 这样 cursor 访问范围是 N-1 到 0，不会漏掉 proposals[0]
             if (cursor == 0) {
                 cursor = proposalCount;
@@ -2382,11 +2381,7 @@ contract ServerNodeV2Backup is
             unchecked {
                 --cursor;
                 ++scanned;
-            }
-
-            // ✅ 回到起点说明扫完一圈
-            if (cursor == startCursor) {
-                completedFullCycle = true;
+                ++totalScanned;
             }
 
             WithdrawProposal storage p = withdrawProposals[cursor];

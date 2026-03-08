@@ -1043,6 +1043,11 @@ describe("ServerNodeV2Backup 完整测试", function () {
       // 分配节点给用户
       await serverNodeV2Backup.connect(admin).allocateNodes(user1.address, admin.address, 2, 2, 0);
 
+      // ✅ 由于新增的防护逻辑，需要等待下一个区块才能查询到分配记录
+      // 这是因为 _getStakeAddressesWithEquivalent 会跳过当前区块的分配记录
+      // 使用 evm_mine 强制进入下一个区块
+      await ethers.provider.send("evm_mine", []);
+
       // 查询质押地址和等效值
       const [stakeAddresses, equivalents, totalStakeEquivalent] = await serverNodeV2Backup.getStakeAddressesWithEquivalent(user1.address);
 
@@ -1815,7 +1820,8 @@ describe("ServerNodeV2Backup 完整测试", function () {
       expect(user2AfterFirst).to.be.gt(user2InitialBalance);
       expect(user1AfterFirst).to.be.gt(user1InitialBalance);
 
-      // 第二次分发奖励（同一天）
+      // ✅ Critical 修复后：同一天第二次调用应该跳过已领取的用户
+      // 因为 lastRewardDay[user][year] >= currentDay 会跳过
       await serverNodeV2Backup.connect(owner).configRewards([user2.address]);
 
       // 记录第二次分发后的余额

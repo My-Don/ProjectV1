@@ -29,11 +29,12 @@ describe("SwapTrade Contract", function () {
     mockUSDT = await MockERC20.deploy("USDT", "USDT");
     await mockUSDT.waitForDeployment();
 
-    // 为 owner 地址分配代币
-    const initialAmount = ethers.parseEther("10000");
-    await mockBKC.transfer(owner.address, initialAmount);
-    await mockSNC.transfer(owner.address, initialAmount);
-    await mockUSDT.transfer(owner.address, initialAmount);
+    // 铸造更多代币给 owner 地址（MockERC20 构造函数只铸造了 1000 个）
+    // 需要足够的代币用于：添加流动性 + 分配给测试账户
+    const initialAmount = ethers.parseEther("50000");
+    await mockBKC.mint(owner.address, initialAmount);
+    await mockSNC.mint(owner.address, initialAmount);
+    await mockUSDT.mint(owner.address, initialAmount);
 
     // 部署 UniswapV2Factory
     const MockFactory = await ethers.getContractFactory("UniswapV2Factory");

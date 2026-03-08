@@ -2208,7 +2208,6 @@ contract ServerNodeV2Backup is
         internal
         returns (uint256 dailyReward, uint16 currentYear, uint256 currentDay)
     {
-        // 调用内部 view 函数获取数据
         (uint256 _dailyReward, uint16 _currentYear, uint256 _currentDay) = _getCurrentRewardInfoView();
 
         // ✅ 防止 currentDay 倒退（重复领取攻击）
@@ -2222,7 +2221,9 @@ contract ServerNodeV2Backup is
         } else {
             // 同一天，使用快照值
             // ✅ 修复问题AH：升级场景下 lastDailyRewardSnapshot == 0，使用实时值
+            // ✅ 修复问题AI：同时写入快照，确保同天多批次调用使用相同值
             if (lastDailyRewardSnapshot == 0) {
+                lastDailyRewardSnapshot = _dailyReward;
                 dailyReward = _dailyReward;
             } else {
                 dailyReward = lastDailyRewardSnapshot;

@@ -27,7 +27,6 @@ library Counters {
  * @title 服务器节点管理合约
  * @notice 管理节点创建、分配节点、奖励分发、暂停节点、白名单、多签等所有功能
  * @dev 可升级，确保安全可靠
- * 示例 https://sepolia.etherscan.io/tx/0x25ff67a6d5ff1c8d46fed4c912694d2f1a67a7fef1d02db3d8fae1d52b76ff30
  */
 contract ServerNodeV2Backup is
     Initializable,
@@ -47,8 +46,12 @@ contract ServerNodeV2Backup is
     uint256 public constant MAX_BATCH_ALLOCATIONS = 20; // 批量分配最大数量
     uint256 public constant MAX_REWARD_USERS = 20; // 奖励分发最大用户数
     uint256 public constant MAX_USER_ALLOCATIONS = 100; // 单个用户最大分配记录数
+    uint256 public constant MAX_STAKE_ADDRESSES = 50; // 单个用户最大质押地址数
     uint256 public constant MEDIUM_NODE_AMOUNT = 200_000; // 中节点金额
     uint256 public constant SMALL_NODE_AMOUNT = 50_000; // 小节点金额
+    uint256 public constant MAX_DAILY_REWARD = 100 ether; // 每日奖励上限
+    uint256 public constant MAX_CLEANUP_STEPS = 500; // 清理过期提案最大步数
+    uint256 public constant MIN_STAKE_DURATION = 12 hours; // ✅ 最小质押时间，防止 Reward Timing Attack
 
     // ====== 核心数据 ======
     using Counters for Counters.Counter;
@@ -86,6 +89,7 @@ contract ServerNodeV2Backup is
         uint8 nodeType; // 节点类型（1=大节点，2=中节点，3=小节点，4=商品）
         uint256 amount; // 分配金额
         uint256 nodeId; // 关联的节点ID
+        uint256 nonce; // 唯一标识符，防止同一区块内相同参数记录误匹配
     }
 
     // 批量分配的结构
@@ -97,6 +101,13 @@ contract ServerNodeV2Backup is
         uint256 amount; // 金额（用于商品）
     }
 
+    // 用户质押缓存结构（用于奖励分发优化）
+    struct UserStakeCache {
+        address[] stakeAddresses;
+        uint256[] equivalents;
+        uint256 totalEquivalent;
+    }
+
     // ====== 各种映射和数组 ======
     mapping(address => bool) public whiteList; // 白名单
     uint8 public currentWhitelistCount; // 当前白名单人数
@@ -106,6 +117,17 @@ contract ServerNodeV2Backup is
 
     // 防止 currentDay 倒退导致重复领取
     uint256 public lastGlobalRewardDay;
+
+    // ✅ 上一次奖励的时间戳，用于防止 Reward Timing Attack
+    // 分配必须在上一次奖励之前就已存在，才能参与本次奖励
+    uint256 public lastRewardTimestamp;
+
+    // ✅ 用户最后一次分配变化的时间戳，用于防止 Allocation State Manipulation Attack
+    // 用户必须在奖励前 MIN_STAKE_DURATION 内没有改变分配状态
+    mapping(address => uint256) public lastAllocationChangeTimestamp;
+
+    // 分配记录 nonce 计数器，用于唯一标识每条记录
+    uint256 private _allocationNonce;
 
     mapping(address => AllocationRecord[]) public userAllocationRecords; // 每个人的分配记录
     mapping(uint256 => AllocationRecord[]) public nodeAllocationRecords; // 每个节点的分配记录
@@ -275,6 +297,7 @@ contract ServerNodeV2Backup is
     error DuplicateProposalExists(); // 存在相同参数的未执行提案
     error TooManyActiveWithdrawProposals(); // 活跃提案总数超限
     error SignerActiveProposalLimitExceeded(); // 签名者活跃提案数超限
+    error StakeAddressLimitExceeded(); // 质押地址数量超限
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -592,6 +615,9 @@ contract ServerNodeV2Backup is
         }
         if (!found) revert RecordNotFound();
 
+        // ✅ 更新用户最后一次分配变化的时间戳
+        lastAllocationChangeTimestamp[user] = block.timestamp;
+
         // 触发取消分配事件
         emit NodeDeallocated(user, stakeAddress, nodeType, amount, nodeId);
     }
@@ -611,6 +637,9 @@ contract ServerNodeV2Backup is
 
         AllocationRecord memory recordCopy = userRecords[userRecordIndex];
         _deallocateUserRecordByIndex(user, userRecordIndex, recordCopy);
+
+        // ✅ 更新用户最后一次分配变化的时间戳
+        lastAllocationChangeTimestamp[user] = block.timestamp;
 
         emit NodeDeallocated(
             user,
@@ -632,7 +661,7 @@ contract ServerNodeV2Backup is
         userRecords[userRecordIndex] = userRecords[userRecords.length - 1];
         userRecords.pop();
 
-        // 2) 从节点分配记录中移除（用更严格的字段匹配，避免误删）
+        // 2) 从节点分配记录中移除（用 nonce 精确匹配，避免误删）
         AllocationRecord[] storage nodeRecords = nodeAllocationRecords[
             record.nodeId
         ];
@@ -640,14 +669,8 @@ contract ServerNodeV2Backup is
         uint256 nodeRecordsLength = nodeRecords.length;
         for (uint256 i = 0; i < nodeRecordsLength; ) {
             AllocationRecord storage nr = nodeRecords[i];
-            if (
-                nr.timestamp == record.timestamp &&
-                nr.user == record.user &&
-                nr.stakeAddress == record.stakeAddress &&
-                nr.nodeType == record.nodeType &&
-                nr.amount == record.amount &&
-                nr.nodeId == record.nodeId
-            ) {
+            // ✅ 使用 nonce 精确匹配，避免同一区块内相同参数记录误匹配
+            if (nr.nonce == record.nonce) {
                 nodeRecords[i] = nodeRecords[nodeRecords.length - 1];
                 nodeRecords.pop();
                 nodeRecordFound = true;
@@ -749,6 +772,9 @@ contract ServerNodeV2Backup is
                 totalAmount = quantity * SMALL_NODE_AMOUNT;
             }
         }
+
+        // ✅ 更新用户最后一次分配变化的时间戳，用于防止 Allocation State Manipulation Attack
+        lastAllocationChangeTimestamp[user] = block.timestamp;
 
         // 更新等效值
         _updateEquivalentValue(user, totalAmount);
@@ -1214,6 +1240,9 @@ contract ServerNodeV2Backup is
         // 更新节点累计分配金额
         nodeTotalAllocated[nodeId] = newTotal;
 
+        // ✅ 生成唯一 nonce，防止同一区块内相同参数记录误匹配
+        uint256 currentNonce = _allocationNonce++;
+
         // 创建分配记录
         AllocationRecord memory record = AllocationRecord({
             timestamp: block.timestamp,
@@ -1221,7 +1250,8 @@ contract ServerNodeV2Backup is
             stakeAddress: stakeAddress,
             nodeType: nodeType,
             amount: amount,
-            nodeId: nodeId
+            nodeId: nodeId,
+            nonce: currentNonce
         });
 
         // 保存到两个地方：1.按用户索引 2.按节点索引
@@ -1375,6 +1405,92 @@ contract ServerNodeV2Backup is
     }
 
     /**
+     * @dev 验证节点容量一致性（invariant check）
+     * @param nodeId 节点ID
+     * @return isConsistent 是否一致
+     * @return calculatedTotal 从分配记录计算的总金额
+     * @return recordedTotal nodeTotalAllocated 记录的值
+     * @notice 用于检测状态不一致问题
+     */
+    function verifyNodeCapacityConsistency(
+        uint256 nodeId
+    )
+        external
+        view
+        returns (
+            bool isConsistent,
+            uint256 calculatedTotal,
+            uint256 recordedTotal
+        )
+    {
+        if (!nodeExists(nodeId)) {
+            return (false, 0, 0);
+        }
+
+        recordedTotal = nodeTotalAllocated[nodeId];
+        calculatedTotal = 0;
+
+        AllocationRecord[] storage records = nodeAllocationRecords[nodeId];
+        uint256 len = records.length;
+
+        for (uint256 i = 0; i < len; ) {
+            calculatedTotal += records[i].amount;
+            unchecked {
+                ++i;
+            }
+        }
+
+        isConsistent = (calculatedTotal == recordedTotal);
+    }
+
+    /**
+     * @dev 验证用户等效值一致性
+     * @param user 用户地址
+     * @return isConsistent 是否一致
+     * @return calculatedEquivalent 从分配记录计算的等效值
+     * @return recordedEquivalent userPhysicalNodesEquivalent 记录的值
+     */
+    function verifyUserEquivalentConsistency(
+        address user
+    )
+        external
+        view
+        returns (
+            bool isConsistent,
+            uint256 calculatedEquivalent,
+            uint256 recordedEquivalent
+        )
+    {
+        recordedEquivalent = userPhysicalNodesEquivalent[user];
+        calculatedEquivalent = 0;
+
+        AllocationRecord[] storage records = userAllocationRecords[user];
+        uint256 len = records.length;
+
+        for (uint256 i = 0; i < len; ) {
+            uint256 nodeId = records[i].nodeId;
+            uint256 nodeIndex = nodeIndexById[nodeId];
+
+            // 只计算活跃节点的等效值
+            if (
+                nodeIndex < deployNode.length &&
+                deployNode[nodeIndex].id == nodeId &&
+                deployNode[nodeIndex].isActive
+            ) {
+                uint256 equivalent = (records[i].amount * SCALE) /
+                    DEFAULT_CAPACITY;
+                calculatedEquivalent += equivalent;
+            }
+
+            unchecked {
+                ++i;
+            }
+        }
+
+        isConsistent = (calculatedEquivalent == recordedEquivalent);
+    }
+
+    /**
      * @dev 按用户查询分配记录
      * @param user 用户地址
      * @return 该用户的所有分配记录
@@ -1486,16 +1602,20 @@ contract ServerNodeV2Backup is
     /**
      * @dev 从用户的分配记录中获取质押地址及其对应的等效值
      * @param user 用户地址
-     * @return 质押地址数组和对应的等效值数组
+     * @return stakeAddresses 质押地址数组
+     * @return equivalents 等效值数组
+     * @return totalStakeEquivalent 总等效值
      */
-
-    function getStakeAddressesWithEquivalent(
+    function _getStakeAddressesWithEquivalent(
         address user
-    ) public view returns (address[] memory, uint256[] memory, uint256) {
+    ) internal view returns (
+        address[] memory stakeAddresses,
+        uint256[] memory equivalents,
+        uint256 totalStakeEquivalent
+    ) {
         AllocationRecord[] storage records = userAllocationRecords[user];
         uint256 len = records.length;
 
-        // ✅ 限制最大记录数，防止 gas 爆炸
         if (len > MAX_USER_ALLOCATIONS) {
             len = MAX_USER_ALLOCATIONS;
         }
@@ -1504,39 +1624,37 @@ contract ServerNodeV2Backup is
         uint256[] memory tempEquivalents = new uint256[](len);
 
         uint256 uniqueCount = 0;
-        uint256 totalStakeEquivalent = 0;
+        totalStakeEquivalent = 0;
+
+        // ✅ 获取上一次奖励时间戳，防止 Reward Timing Attack
+        uint256 lastReward = lastRewardTimestamp;
 
         for (uint256 i = 0; i < len; ) {
             AllocationRecord storage record = records[i];
+
+            // ✅ 防止 Reward Timing Attack：
+            // 如果有上一次奖励，只有在上一次奖励之前就已存在的分配才能参与本次奖励
+            // 第一次奖励时 lastReward = 0，所有分配都参与（初始化阶段）
+            if (lastReward > 0 && record.timestamp >= lastReward) {
+                unchecked { ++i; }
+                continue;
+            }
+
             uint256 nodeId = record.nodeId;
 
             uint256 nodeIndex = nodeIndexById[nodeId];
-            if (nodeIndex >= deployNode.length) {
-                // 节点索引越界，说明数据损坏
-                revert NodeIndexCorrupted(nodeId, nodeIndex, type(uint256).max);
-            }
-            if (deployNode[nodeIndex].id != nodeId) {
-                // 节点索引不匹配，说明数据损坏
-                revert NodeIndexCorrupted(
-                    nodeId,
-                    nodeIndex,
-                    deployNode[nodeIndex].id
-                );
+            if (nodeIndex >= deployNode.length || deployNode[nodeIndex].id != nodeId) {
+                revert NodeIndexCorrupted(nodeId, nodeIndex, nodeIndex < deployNode.length ? deployNode[nodeIndex].id : type(uint256).max);
             }
 
-            // 统计 active 节点
             if (!deployNode[nodeIndex].isActive) {
-                unchecked {
-                    ++i;
-                }
+                unchecked { ++i; }
                 continue;
             }
 
             uint256 equivalent = (record.amount * SCALE) / DEFAULT_CAPACITY;
             if (equivalent == 0) {
-                unchecked {
-                    ++i;
-                }
+                unchecked { ++i; }
                 continue;
             }
 
@@ -1544,7 +1662,6 @@ contract ServerNodeV2Backup is
 
             address stakeAddr = record.stakeAddress;
 
-            // ✅ 遍历所有已记录的地址，确保统计准确
             bool found = false;
             for (uint256 j = 0; j < uniqueCount; ) {
                 if (tempAddresses[j] == stakeAddr) {
@@ -1552,37 +1669,41 @@ contract ServerNodeV2Backup is
                     found = true;
                     break;
                 }
-                unchecked {
-                    ++j;
-                }
+                unchecked { ++j; }
             }
 
             if (!found) {
-                // uniqueCount 不可能超过 len（唯一地址数 ≤ 分配记录数），此处直接赋值安全
+                // ✅ 限制单个用户的质押地址数量，防止 gas DoS 和地址拆分攻击
+                if (uniqueCount >= MAX_STAKE_ADDRESSES) {
+                    revert StakeAddressLimitExceeded();
+                }
                 tempAddresses[uniqueCount] = stakeAddr;
                 tempEquivalents[uniqueCount] = equivalent;
-                unchecked {
-                    ++uniqueCount;
-                }
+                unchecked { ++uniqueCount; }
             }
 
-            unchecked {
-                ++i;
-            }
+            unchecked { ++i; }
         }
 
-        address[] memory stakeAddresses = new address[](uniqueCount);
-        uint256[] memory equivalents = new uint256[](uniqueCount);
+        stakeAddresses = new address[](uniqueCount);
+        equivalents = new uint256[](uniqueCount);
 
         for (uint256 i = 0; i < uniqueCount; ) {
             stakeAddresses[i] = tempAddresses[i];
             equivalents[i] = tempEquivalents[i];
-            unchecked {
-                ++i;
-            }
+            unchecked { ++i; }
         }
+    }
 
-        return (stakeAddresses, equivalents, totalStakeEquivalent);
+    /**
+     * @dev 从用户的分配记录中获取质押地址及其对应的等效值（外部查询接口）
+     * @param user 用户地址
+     * @return 质押地址数组和对应的等效值数组
+     */
+    function getStakeAddressesWithEquivalent(
+        address user
+    ) external view returns (address[] memory, uint256[] memory, uint256) {
+        return _getStakeAddressesWithEquivalent(user);
     }
 
     // ==================== 奖励分发功能 ====================
@@ -1619,14 +1740,16 @@ contract ServerNodeV2Backup is
             uint256 currentDay
         ) = _getCurrentRewardInfo();
         require(dailyReward > 0, "No reward");
+        // ✅ 限制每日奖励上限，防止奖励计算器异常导致资金损失
+        require(dailyReward <= MAX_DAILY_REWARD, "Reward exceeds limit");
 
-        // ===== 2️⃣ 计算有效总等效值（只统计 active 节点）=====
+        // ===== 2️⃣ 第一轮：计算有效总等效值并缓存质押信息 =====
         uint256 effectiveTotal = 0;
 
-        // ✅ 只缓存每个用户的 active 等效值，降低内存占用（更稳）
+        // ✅ 缓存每个用户的等效值和质押信息，避免第二轮重复调用
         uint256[] memory allTotalEquivalents = new uint256[](length);
+        UserStakeCache[] memory stakeCaches = new UserStakeCache[](length);
 
-        // 先计算所有用户的 active 节点总等效值
         for (uint256 i = 0; i < length; ) {
             address user = _users[i];
             if (user == address(0)) {
@@ -1644,7 +1767,20 @@ contract ServerNodeV2Backup is
                 continue;
             }
 
-            // ✅ 去重：检查同一批次内是否已经处理过该地址，防止 effectiveTotal 被重复累加
+            // ✅ 防止 Allocation State Manipulation Attack：
+            // 用户必须在奖励前 MIN_STAKE_DURATION 内没有改变分配状态
+            // 这确保攻击者无法在奖励前临时增加分配来获取更多奖励
+            // 注意：只在有上一次奖励时才检查（初始化阶段跳过）
+            uint256 lastChange = lastAllocationChangeTimestamp[user];
+            uint256 lastReward = lastRewardTimestamp;
+            if (lastReward > 0 && lastChange > 0 && block.timestamp < lastChange + MIN_STAKE_DURATION) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+
+            // ✅ 去重：检查同一批次内是否已经处理过该地址
             bool isDuplicate = false;
             for (uint256 k = 0; k < i; ) {
                 if (_users[k] == user) {
@@ -1662,17 +1798,20 @@ contract ServerNodeV2Backup is
                 continue;
             }
 
-            // ✅ 获取并缓存该用户 active 节点的等效值
-            try this.getStakeAddressesWithEquivalent(user) returns (
-                address[] memory,
-                uint256[] memory,
-                uint256 userActiveEquivalent
-            ) {
-                allTotalEquivalents[i] = userActiveEquivalent;
-                effectiveTotal += userActiveEquivalent;
-            } catch {
-                emit RewardUserSkipped(user, 1);
-            }
+            // ✅ 获取并缓存该用户 active 节点的质押信息
+            (
+                address[] memory _stakeAddresses,
+                uint256[] memory _equivalents,
+                uint256 _userActiveEquivalent
+            ) = _getStakeAddressesWithEquivalent(user);
+
+            allTotalEquivalents[i] = _userActiveEquivalent;
+            stakeCaches[i] = UserStakeCache({
+                stakeAddresses: _stakeAddresses,
+                equivalents: _equivalents,
+                totalEquivalent: _userActiveEquivalent
+            });
+            effectiveTotal += _userActiveEquivalent;
 
             unchecked {
                 ++i;
@@ -1686,30 +1825,12 @@ contract ServerNodeV2Backup is
 
         require(effectiveTotal > 0, "No total");
 
-        // ===== 3️⃣ 第一轮：计算所有用户应得奖励（不转账）=====
+        // ===== 3️⃣ 第二轮：计算所有用户应得奖励 =====
         uint256[] memory userRewards = new uint256[](length);
         uint256 totalRewardNeeded = 0;
 
         for (uint256 i = 0; i < length; ) {
-            address user = _users[i];
-            if (user == address(0)) {
-                unchecked {
-                    ++i;
-                }
-                continue;
-            }
-
-            // 当天已领取，跳过
-            if (lastRewardDay[user][currentYear] >= currentDay) {
-                unchecked {
-                    ++i;
-                }
-                continue;
-            }
-
-            // 使用 active 节点的等效值计算奖励
             uint256 userActiveEquivalent = allTotalEquivalents[i];
-
             if (userActiveEquivalent == 0) {
                 unchecked {
                     ++i;
@@ -1734,8 +1855,12 @@ contract ServerNodeV2Backup is
             }
         }
 
+        // ✅ 将 rounding remainder 留在合约中，用于下一次奖励
+        // 这样可以防止 dust capture attack，同时保持公平
+        // remainder = dailyReward - totalRewardNeeded 会留在合约余额中
+        // 下一次奖励时会被自动包含在可用余额中
+
         // ===== 4️⃣ 余额兜底 =====
-        // 确保总奖励不超过每日限额
         require(
             totalRewardNeeded <= dailyReward,
             "Total reward exceeds daily limit"
@@ -1746,7 +1871,7 @@ contract ServerNodeV2Backup is
             "Insufficient contract balance"
         );
 
-        // ===== 5️⃣ 第二轮：实际分发奖励 =====
+        // ===== 5️⃣ 第三轮：实际分发奖励（使用缓存的质押信息）=====
         uint256 usersProcessed = 0;
         uint256 totalDistributed = 0;
 
@@ -1769,31 +1894,10 @@ contract ServerNodeV2Backup is
                 continue;
             }
 
-            /**
-             * ✅ 重新计算质押拆分（避免缓存二维数组导致内存膨胀/批处理失败）
-             */
+            // ✅ 使用缓存的质押信息，避免重复调用 getStakeAddressesWithEquivalent
+            UserStakeCache memory cache = stakeCaches[i];
+            uint256 totalStakeEquivalent = cache.totalEquivalent;
 
-            address[] memory stakeAddresses;
-            uint256[] memory equivalents;
-            uint256 totalStakeEquivalent;
-
-            try this.getStakeAddressesWithEquivalent(user) returns (
-                address[] memory _stakeAddresses,
-                uint256[] memory _equivalents,
-                uint256 _totalStakeEquivalent
-            ) {
-                stakeAddresses = _stakeAddresses;
-                equivalents = _equivalents;
-                totalStakeEquivalent = _totalStakeEquivalent;
-            } catch {
-                emit RewardUserSkipped(user, 1);
-                unchecked {
-                    ++i;
-                }
-                continue;
-            }
-
-            // 若没有任何 active 节点参与，直接跳过
             if (totalStakeEquivalent == 0) {
                 unchecked {
                     ++i;
@@ -1812,9 +1916,9 @@ contract ServerNodeV2Backup is
             _safeRewardTransfer(user, userReward);
 
             // ---- 给质押地址（按等效值比例）----
-            uint256 stakeLength = stakeAddresses.length;
+            uint256 stakeLength = cache.stakeAddresses.length;
             for (uint256 j = 0; j < stakeLength; ) {
-                address stakeAddr = stakeAddresses[j];
+                address stakeAddr = cache.stakeAddresses[j];
                 if (stakeAddr == address(0)) {
                     unchecked {
                         ++j;
@@ -1822,7 +1926,7 @@ contract ServerNodeV2Backup is
                     continue;
                 }
 
-                uint256 stakeReward = (stakeRewardPool * equivalents[j]) /
+                uint256 stakeReward = (stakeRewardPool * cache.equivalents[j]) /
                     totalStakeEquivalent;
                 if (stakeReward == 0) {
                     unchecked {
@@ -1853,6 +1957,10 @@ contract ServerNodeV2Backup is
 
             emit RewardDistributed(user, userReward, currentYear);
         }
+
+        // ✅ 更新上一次奖励时间戳，用于下一次奖励的 Timing Attack 防护
+        // 下一次奖励只会计算此时间戳之前的分配
+        lastRewardTimestamp = block.timestamp;
 
         emit BatchRewardsDistributed(
             usersProcessed,
@@ -1951,6 +2059,23 @@ contract ServerNodeV2Backup is
     function unpauseRewards() external onlyOwner {
         _unpause();
         emit RewardStatusChanged(msg.sender, false);
+    }
+
+    /**
+     * @dev 紧急暂停奖励分发（独立于全局暂停）
+     * @notice 这是一个紧急功能，可以快速停止奖励分发而不影响其他功能
+     */
+    function emergencyPauseRewardDistribution() external onlyOwner {
+        pausedNodeAllocationReward = true;
+        emit AllocationStatusChanged(msg.sender, pausedNodeAllocation, true);
+    }
+
+    /**
+     * @dev 恢复奖励分发
+     */
+    function resumeRewardDistribution() external onlyOwner {
+        pausedNodeAllocationReward = false;
+        emit AllocationStatusChanged(msg.sender, pausedNodeAllocation, false);
     }
 
     // ==================== 其他功能 ====================
@@ -2088,6 +2213,8 @@ contract ServerNodeV2Backup is
 
     function cleanupExpiredProposals(uint256 maxSteps) public {
         require(maxSteps > 0, "maxSteps > 0");
+        // ✅ 限制清理步数上限，防止 gas 攻击
+        require(maxSteps <= MAX_CLEANUP_STEPS, "maxSteps exceeds limit");
 
         uint256 proposalCount = nextWithdrawProposalId;
         if (proposalCount == 0) {
@@ -2295,7 +2422,7 @@ contract ServerNodeV2Backup is
 
     /**
      * @dev Storage gap for future upgrades
-     * ✅ 保留 46 个 slot 用于未来升级，防止 storage 冲突
+     * ✅ 保留 45个 slot 用于未来升级，防止 storage 冲突
      */
-    uint256[46] private __gap;
+    uint256[45] private __gap;
 }

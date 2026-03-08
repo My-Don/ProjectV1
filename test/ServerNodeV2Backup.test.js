@@ -1688,6 +1688,10 @@ describe("ServerNodeV2Backup 完整测试", function () {
         0
       );
 
+      // ✅ 等待 MIN_STAKE_DURATION (12 小时) 后才能领取奖励
+      await ethers.provider.send("evm_increaseTime", [13 * 60 * 60]);
+      await ethers.provider.send("evm_mine");
+
       // 给合约充值
       await owner.sendTransaction({
         to: await serverNodeV2Backup.getAddress(),
@@ -1799,6 +1803,10 @@ describe("ServerNodeV2Backup 完整测试", function () {
         0
       );
 
+      // ✅ 等待 MIN_STAKE_DURATION (12 小时) 后才能领取奖励
+      await ethers.provider.send("evm_increaseTime", [13 * 60 * 60]);
+      await ethers.provider.send("evm_mine");
+
       // 给合约充值
       await owner.sendTransaction({
         to: await serverNodeV2Backup.getAddress(),
@@ -1880,6 +1888,10 @@ describe("ServerNodeV2Backup 完整测试", function () {
         1,
         0
       );
+
+      // ✅ 等待 MIN_STAKE_DURATION (12 小时) 后才能领取奖励
+      await ethers.provider.send("evm_increaseTime", [13 * 60 * 60]);
+      await ethers.provider.send("evm_mine");
 
       // 给合约充值
       await owner.sendTransaction({
@@ -1992,6 +2004,10 @@ describe("ServerNodeV2Backup 完整测试", function () {
         1,
         0
       );
+
+      // ✅ 等待 MIN_STAKE_DURATION (12 小时) 后才能领取奖励
+      await ethers.provider.send("evm_increaseTime", [13 * 60 * 60]);
+      await ethers.provider.send("evm_mine");
 
       // 给合约充值
       await owner.sendTransaction({

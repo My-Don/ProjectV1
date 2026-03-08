@@ -67,10 +67,10 @@ contract DecreasingRewardCalculator {
         // 计算年数（1-based）
         uint256 year = ((daysFromDeployment - 1) / 365) + 1;
 
-        // 第31年及以后永久使用第30年的奖励值（不再递减），
-        // 这是有意的设计：30年后奖励维持在约 0.042 ETH/天 的水平永久运行。
+        // 第31年及以后永久使用第30年的奖励值（不再递减）
+        // 这是有意的设计：30年后奖励维持在约 0.042 ETH/天 的水平永久运行
         // 注意：由于每次整除存在截断误差，第30年实际值与理论值（1e18 × 0.9^29）
-        // 存在约 1~3% 的偏差，属于可接受范围。
+        // 存在约 1~3% 的偏差，属于可接受范围
         if (year > DECREASE_YEARS) {
             year = DECREASE_YEARS;
         }
@@ -99,13 +99,13 @@ contract DecreasingRewardCalculator {
     /**
      * @dev 获取从部署日到当前区块时间的天数
      * @return days 天数（1-based）
-     * 
+     *
      * 计算逻辑：
      * - 部署时刻 (secondsSinceDeployment = 0): 返回第 1 天
      * - 第 1 天期间 [0, 86400): 返回第 1 天
      * - 第 2 天开始 (secondsSinceDeployment >= 86400): 返回第 2 天
      * - 以此类推
-     * 
+     *
      * 公式：(已过去的完整天数) + 1 = 当前天数
      */
     function getDaysSinceDeployment() public view returns (uint256) {
@@ -114,7 +114,7 @@ contract DecreasingRewardCalculator {
     }
 
     /**
-     * @dev 计算指定年份的每日奖励（使用查表法，O(1)复杂度，零精度损失）
+     * @dev 计算指定年份的每日奖励（使用查表法，零精度损失）
      * @param year 年份（1-based）
      * @return 该年份的每日奖励
      */
@@ -127,7 +127,7 @@ contract DecreasingRewardCalculator {
     }
 
     /**
-     * @dev 获取特定年份的奖励信息（视图函数，无Gas成本）
+     * @dev 获取特定年份的奖励信息
      * @param year 年份（1-based）
      * @return dailyReward 该年份的每日奖励基数
      * @return isFixed 该年份是否已固定（第31年及以后）
@@ -145,7 +145,7 @@ contract DecreasingRewardCalculator {
     }
 
     /**
-     * @dev 批量计算多天的奖励（优化Gas使用）
+     * @dev 批量计算多天的奖励
      * @param startDay 起始天数
      * @param count 计算天数（最多365天，防止 out-of-gas）
      * @return rewards 每日奖励数组
@@ -185,7 +185,11 @@ contract DecreasingRewardCalculator {
      * @dev 获取距奖励递减结束还剩多少年
      * @return remaining 剩余递减年数；已过递减期则返回 0
      */
-    function getRemainingDecreaseYears() public view returns (uint256 remaining) {
+    function getRemainingDecreaseYears()
+        public
+        view
+        returns (uint256 remaining)
+    {
         uint256 year = getCurrentYear();
         if (year >= DECREASE_YEARS) {
             return 0;

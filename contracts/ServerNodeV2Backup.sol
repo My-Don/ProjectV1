@@ -26,7 +26,7 @@ library Counters {
 /**
  * @title 服务器节点管理合约
  * @notice 管理节点创建、分配节点、奖励分发、暂停节点、白名单、多签等所有功能
- * @dev 可升级，确保安全可靠,功能迭代
+ * @dev 可升级，确保安全可靠, 功能迭代
  */
 contract ServerNodeV2Backup is
     Initializable,
@@ -47,7 +47,7 @@ contract ServerNodeV2Backup is
     uint256 public constant MAX_REWARD_USERS = 20; // 奖励分发最大用户数
     uint256 public constant MAX_USER_ALLOCATIONS = 100; // 单个用户最大分配记录数
     uint256 public constant MAX_STAKE_ADDRESSES = 50; // 单个用户最大质押地址数
-    uint256 public constant MAX_BATCH_NODE_CREATE = 50; // 单次批量创建节点最大数量，防止 O(n²) Gas DoS
+    uint256 public constant MAX_BATCH_NODE_CREATE = 50; // 单次批量创建节点最大数量，Gas DoS
     uint256 public constant MEDIUM_NODE_AMOUNT = 200_000; // 中节点金额
     uint256 public constant SMALL_NODE_AMOUNT = 50_000; // 小节点金额
     uint256 public constant MAX_DAILY_REWARD = 100 ether; // 每日奖励上限

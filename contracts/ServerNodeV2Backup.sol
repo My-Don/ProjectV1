@@ -26,7 +26,7 @@ library Counters {
 /**
  * @title 服务器节点管理合约
  * @notice 管理节点创建、分配节点、奖励分发、暂停节点、白名单、多签等所有功能
- * @dev 可升级，确保安全可靠
+ * @dev 可升级，确保安全可靠,功能迭代
  */
 contract ServerNodeV2Backup is
     Initializable,

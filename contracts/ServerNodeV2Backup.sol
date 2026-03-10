@@ -52,7 +52,7 @@ contract ServerNodeV2Backup is
     uint256 public constant SMALL_NODE_AMOUNT = 50_000; // 小节点金额
     uint256 public constant MAX_DAILY_REWARD = 100 ether; // 每日奖励上限
     uint256 public constant MAX_CLEANUP_STEPS = 500; // 清理过期提案最大步数
-    uint256 public constant MIN_STAKE_DURATION = 12 hours; // ✅ 最小质押时间，防止 Reward Timing Attack
+    uint256 public constant MIN_STAKE_DURATION = 12 hours; // 最小质押时间，防止 Reward Timing Attack
 
     // ====== 核心数据 ======
     using Counters for Counters.Counter;
@@ -60,9 +60,9 @@ contract ServerNodeV2Backup is
 
     address private REWARD; // 奖励计算器的地址
     uint256 public totalPhysicalNodesEquivalent; // 所有人总共买了多少节点的等效值
-    uint256 public totalActiveEquivalent; // ✅ Critical: 全局活跃等效值，用于奖励计算分母
-    uint256 public lastRewardActiveEquivalent; // ✅ Bug 2 修复: 上一次奖励时的活跃等效值快照
-    // ✅ 修复问题Y：独立布尔标志，防止 lastRewardActiveEquivalent 降至 0 后哨兵被"重置"
+    uint256 public totalActiveEquivalent; // 全局活跃等效值，用于奖励计算分母
+    uint256 public lastRewardActiveEquivalent; // 上一次奖励时的活跃等效值快照
+    // 防止 lastRewardActiveEquivalent 降至 0 后哨兵被"重置"
     bool public hasDistributedReward;
     NodeInfo[] public deployNode; // 所有已创建的节点
 
@@ -123,14 +123,14 @@ contract ServerNodeV2Backup is
     // 防止 currentDay 倒退导致重复领取
     uint256 public lastGlobalRewardDay;
 
-    // ✅ 修复问题AC：当天 dailyReward 快照，确保同一天多批次调用使用相同值
+    // 当天 dailyReward 快照，确保同一天多批次调用使用相同值
     uint256 public lastDailyRewardSnapshot;
 
-    // ✅ 上一次奖励的时间戳，用于防止 Reward Timing Attack
+    // 上一次奖励的时间戳，用于防止 Reward Timing Attack
     // 分配必须在上一次奖励之前就已存在，才能参与本次奖励
     uint256 public lastRewardTimestamp;
 
-    // ✅ 用户最后一次分配变化的时间戳，用于防止 Allocation State Manipulation Attack
+    // 用户最后一次分配变化的时间戳，用于防止 Allocation State Manipulation Attack
     // 用户必须在奖励前 MIN_STAKE_DURATION 内没有改变分配状态
     mapping(address => uint256) public lastAllocationChangeTimestamp;
 
@@ -163,7 +163,7 @@ contract ServerNodeV2Backup is
 
     uint256 public activeWithdrawProposalCount; // 当前活跃提案总数
     uint256 public withdrawProposalCleanupCursor; // 过期清理游标（增量扫描）
-    uint256 public constant PROPOSAL_EXPIRY_TIME = 7 days; // ✅ 提案过期时间
+    uint256 public constant PROPOSAL_EXPIRY_TIME = 7 days; // 提案过期时间
     uint256 public constant MAX_ACTIVE_WITHDRAW_PROPOSALS = 200; // 活跃提案总量上限
     uint256 public constant MAX_SIGNER_ACTIVE_WITHDRAW_PROPOSALS = 20; // 单签名者活跃提案上限
     uint256 public constant EXPIRED_PROPOSAL_CLEANUP_STEPS = 120; // 单次过期清理扫描步数
@@ -304,7 +304,6 @@ contract ServerNodeV2Backup is
     error DuplicateProposalExists(); // 存在相同参数的未执行提案
     error TooManyActiveWithdrawProposals(); // 活跃提案总数超限
     error SignerActiveProposalLimitExceeded(); // 签名者活跃提案数超限
-    // ✅ 问题AG：此错误定义已不再使用（问题AA修复后改为返回标志）
     // 保留用于向后兼容，防止升级时存储布局变化
     error StakeAddressLimitExceeded(); // 质押地址数量超限（已废弃）
 
@@ -343,7 +342,7 @@ contract ServerNodeV2Backup is
 
         REWARD = _rewardCalculator;
 
-        // ✅ 验证 REWARD 合约接口兼容性
+        // 验证 REWARD 合约接口兼容性
         _validateRewardCalculator(_rewardCalculator);
 
         // 初始化多签
@@ -367,7 +366,7 @@ contract ServerNodeV2Backup is
         withdrawThreshold = _withdrawThreshold;
         emit WithdrawMultiSigInitialized(_withdrawSigners, _withdrawThreshold);
 
-        // ✅ 修复问题C：用初始化时间作为首次奖励的锚定时间戳
+        // 用初始化时间作为首次奖励的锚定时间戳
         // 这样首次奖励时 MIN_STAKE_DURATION 检查就会生效
         // 防止攻击者在部署后立即分配并领取首次奖励
         lastRewardTimestamp = block.timestamp;
@@ -376,7 +375,7 @@ contract ServerNodeV2Backup is
     /**
      * @dev 验证奖励计算器合约接口
      * @param _rewardCalculator 奖励计算器地址
-     * ✅ 确保合约实现了 getCurrentDailyReward() returns (uint256, uint256)
+     * 确保合约实现了 getCurrentDailyReward() returns (uint256, uint256)
      */
     function _validateRewardCalculator(
         address _rewardCalculator
@@ -407,7 +406,7 @@ contract ServerNodeV2Backup is
     /**
      * @dev 更新奖励计算器地址（仅 owner）
      * @param _newRewardCalculator 新的奖励计算器地址
-     * ✅ 允许在运行时更新 REWARD 地址，并验证新合约兼容性
+     * 允许在运行时更新 REWARD 地址，并验证新合约兼容性
      */
     function updateRewardCalculator(
         address _newRewardCalculator
@@ -441,7 +440,7 @@ contract ServerNodeV2Backup is
     ) public onlyOwner nonReentrant {
         uint256 length = _nodeInfo.length;
         require(length > 0, "No nodes");
-        // ✅ 修复高危问题1：限制单次批量创建节点数量，防止 Gas DoS
+        // 限制单次批量创建节点数量，防止 Gas DoS
         require(length <= MAX_BATCH_NODE_CREATE, "Batch too large");
         require(
             deployNode.length + length <= BIGNODE,
@@ -468,7 +467,7 @@ contract ServerNodeV2Backup is
         }
 
         for (uint256 i = 0; i < length; ) {
-            // ✅ 修复低危问题5：检查IP地址是否为空
+            // 检查IP地址是否为空
             require(
                 bytes(_nodeInfo[i].ip).length > 0,
                 "IP cannot be empty"
@@ -637,7 +636,7 @@ contract ServerNodeV2Backup is
         }
         if (!found) revert RecordNotFound();
 
-        // ✅ 更新用户最后一次分配变化的时间戳
+        // 更新用户最后一次分配变化的时间戳
         lastAllocationChangeTimestamp[user] = block.timestamp;
 
         // 触发取消分配事件
@@ -660,7 +659,7 @@ contract ServerNodeV2Backup is
         AllocationRecord memory recordCopy = userRecords[userRecordIndex];
         _deallocateUserRecordByIndex(user, userRecordIndex, recordCopy);
 
-        // ✅ 更新用户最后一次分配变化的时间戳
+        // 更新用户最后一次分配变化的时间戳
         lastAllocationChangeTimestamp[user] = block.timestamp;
 
         emit NodeDeallocated(
@@ -691,7 +690,7 @@ contract ServerNodeV2Backup is
         uint256 nodeRecordsLength = nodeRecords.length;
         for (uint256 i = 0; i < nodeRecordsLength; ) {
             AllocationRecord storage nr = nodeRecords[i];
-            // ✅ 使用 nonce 精确匹配，避免同一区块内相同参数记录误匹配
+            // 使用 nonce 精确匹配，避免同一区块内相同参数记录误匹配
             if (nr.nonce == record.nonce) {
                 nodeRecords[i] = nodeRecords[nodeRecords.length - 1];
                 nodeRecords.pop();
@@ -728,15 +727,15 @@ contract ServerNodeV2Backup is
         userPhysicalNodesEquivalent[user] -= equivalent;
         totalPhysicalNodesEquivalent -= equivalent;
 
-        // ✅ Critical: 回滚活跃等效值
+        // 回滚活跃等效值
         // 检查节点是否活跃，如果是则从 totalActiveEquivalent 中扣除
         uint256 nodeIndex = nodeIndexById[record.nodeId];
-        // ✅ 修复问题D：增加 nodeId 校验，确保索引正确
+        // 增加 nodeId 校验，确保索引正确
         if (nodeIndex < deployNode.length && deployNode[nodeIndex].id == record.nodeId && deployNode[nodeIndex].isActive) {
             require(totalActiveEquivalent >= equivalent, "Active equivalent underflow");
             totalActiveEquivalent -= equivalent;
 
-            // ✅ 修复问题A：同步更新快照分母
+            // 同步更新快照分母
             // 只有当撤销的记录是"快照有效"的（timestamp < lastRewardTimestamp）时才更新快照
             // 这确保了快照值与实际有效分配保持一致
             if (lastRewardTimestamp > 0 && record.timestamp < lastRewardTimestamp) {
@@ -815,7 +814,7 @@ contract ServerNodeV2Backup is
             }
         }
 
-        // ✅ 更新用户最后一次分配变化的时间戳，用于防止 Allocation State Manipulation Attack
+        // 更新用户最后一次分配变化的时间戳，用于防止 Allocation State Manipulation Attack
         lastAllocationChangeTimestamp[user] = block.timestamp;
 
         // 更新等效值（分配时节点必须是活跃的，所以传入 true）
@@ -1140,7 +1139,7 @@ contract ServerNodeV2Backup is
         // 更新等效值
         _updateEquivalentValue(user, totalAmount, true);
 
-        // ✅ Bug 1 修复：更新用户最后一次分配变化的时间戳
+        // 更新用户最后一次分配变化的时间戳
         // 防止通过组合分配路径绕过 MIN_STAKE_DURATION 的防操控保护
         lastAllocationChangeTimestamp[user] = block.timestamp;
 
@@ -1286,7 +1285,7 @@ contract ServerNodeV2Backup is
         // 更新节点累计分配金额
         nodeTotalAllocated[nodeId] = newTotal;
 
-        // ✅ 生成唯一 nonce，防止同一区块内相同参数记录误匹配
+        // 生成唯一 nonce，防止同一区块内相同参数记录误匹配
         uint256 currentNonce = _allocationNonce++;
 
         // 创建分配记录
@@ -1368,7 +1367,7 @@ contract ServerNodeV2Backup is
         uint256 equivalent = (amount * SCALE) / DEFAULT_CAPACITY;
         userPhysicalNodesEquivalent[user] += equivalent;
         totalPhysicalNodesEquivalent += equivalent;
-        // ✅ Critical: 只有活跃节点才计入奖励分母
+        // 只有活跃节点才计入奖励分母
         if (isActive) {
             totalActiveEquivalent += equivalent;
         }
@@ -1524,12 +1523,12 @@ contract ServerNodeV2Backup is
         uint256 len = records.length;
 
         for (uint256 i = 0; i < len; ) {
-            // ✅ Bug 3 修复：计算所有分配记录的等效值
+            // 计算所有分配记录的等效值
             // 这应该与 userPhysicalNodesEquivalent 一致
             uint256 equivalent = (records[i].amount * SCALE) / DEFAULT_CAPACITY;
             calculatedEquivalent += equivalent;
 
-            // ✅ 额外计算活跃节点的等效值（用于奖励计算）
+            // 额外计算活跃节点的等效值（用于奖励计算）
             uint256 nodeId = records[i].nodeId;
             uint256 nodeIndex = nodeIndexById[nodeId];
             if (
@@ -1545,7 +1544,7 @@ contract ServerNodeV2Backup is
             }
         }
 
-        // ✅ 比较所有分配记录的等效值与记录值
+        // 比较所有分配记录的等效值与记录值
         isConsistent = (calculatedEquivalent == recordedEquivalent);
     }
 
@@ -1555,7 +1554,7 @@ contract ServerNodeV2Backup is
      * @return isConsistent 是否一致
      * @return calculatedActive 从分配记录计算的活跃等效值
      * @return recordedActive totalActiveEquivalent 记录的值
-     * ✅ Bug 3 修复：接受用户列表参数，实现真正的遍历校验
+     * 接受用户列表参数，实现真正的遍历校验
      * 注意：这个操作 gas 消耗可能很大，只适合在链下调用
      */
     function verifyActiveEquivalentConsistency(
@@ -1685,10 +1684,6 @@ contract ServerNodeV2Backup is
      * @dev 计算节点在当前快照时间点之前的分配等效值
      * @param nodeId 节点ID
      * @return snapshotEquiv 快照时间之前的分配等效值
-     * ✅ 修复问题X：用于 setNodeStatus 同步 lastRewardActiveEquivalent
-     * ⚠️ 问题AD：此函数 Gas 复杂度 O(n)，n = nodeAllocationRecords[nodeId].length
-     * 若某节点被大量用户分配（如1000用户各100条商品记录），setNodeStatus 可能 OOG
-     * 实际风险：onlyAllocationAuthorized 限制分配权限，正常运营下不会出现极端情况
      * 建议：运营时保持节点分配颗粒度适中，避免单个节点过多小额分配
      */
     function _getNodeSnapshotEquivalent(uint256 nodeId) internal view returns (uint256 snapshotEquiv) {
@@ -1734,21 +1729,21 @@ contract ServerNodeV2Backup is
         NodeInfo storage node = deployNode[index];
         require(node.id == nodeId, "ID mismatch");
 
-        // ✅ Critical: 更新全局活跃等效值
+        // 更新全局活跃等效值
         // 只有状态真正改变时才更新
         if (node.isActive != isActive) {
             // 计算该节点的已分配等效值
             uint256 nodeAllocated = nodeTotalAllocated[nodeId];
             uint256 nodeEquivalent = (nodeAllocated * SCALE) / DEFAULT_CAPACITY;
 
-            // ✅ 修复问题X：计算快照有效等效值，用于同步 lastRewardActiveEquivalent
+            // 计算快照有效等效值，用于同步 lastRewardActiveEquivalent
             // 只计入 timestamp < lastRewardTimestamp 的分配，与 _getStakeAddressesWithEquivalent 过滤逻辑对齐
             uint256 snapshotEquiv = _getNodeSnapshotEquivalent(nodeId);
 
             if (isActive) {
                 // 节点被激活：增加活跃等效值
                 totalActiveEquivalent += nodeEquivalent;
-                // ✅ 修复问题X：同步更新快照，只加快照有效部分
+                // 同步更新快照，只加快照有效部分
                 if (lastRewardTimestamp > 0) {
                     lastRewardActiveEquivalent += snapshotEquiv;
                 }
@@ -1756,7 +1751,7 @@ contract ServerNodeV2Backup is
                 // 节点被暂停：减少活跃等效值
                 require(totalActiveEquivalent >= nodeEquivalent, "Active equivalent underflow");
                 totalActiveEquivalent -= nodeEquivalent;
-                // ✅ 修复问题X：同步更新快照，只减快照有效部分
+                // 同步更新快照，只减快照有效部分
                 if (lastRewardTimestamp > 0) {
                     if (lastRewardActiveEquivalent >= snapshotEquiv) {
                         lastRewardActiveEquivalent -= snapshotEquiv;
@@ -1779,7 +1774,6 @@ contract ServerNodeV2Backup is
      * @return equivalents 等效值数组
      * @return totalStakeEquivalent 总等效值
      * @return stakeAddressLimitExceeded 质押地址数量是否超限（用于 configRewards 跳过该用户）
-     * ✅ 修复问题AA：将 revert 改为返回标志，避免整批奖励失败
      */
     function _getStakeAddressesWithEquivalent(
         address user
@@ -1792,10 +1786,6 @@ contract ServerNodeV2Backup is
         AllocationRecord[] storage records = userAllocationRecords[user];
         uint256 len = records.length;
 
-        // ✅ 清理低危问题7：删除死代码
-        // _recordAllocation 已限制记录数不超过 MAX_USER_ALLOCATIONS，此处检查永远不会生效
-        // 保留注释说明：如果未来移除 _recordAllocation 的限制，需要恢复此检查
-
         address[] memory tempAddresses = new address[](len);
         uint256[] memory tempEquivalents = new uint256[](len);
 
@@ -1803,24 +1793,24 @@ contract ServerNodeV2Backup is
         totalStakeEquivalent = 0;
         stakeAddressLimitExceeded = false;
 
-        // ✅ 获取上一次奖励时间戳，防止 Reward Timing Attack
+        // 获取上一次奖励时间戳，防止 Reward Timing Attack
         uint256 lastReward = lastRewardTimestamp;
 
-        // ✅ 修复问题Y和问题Z：使用 hasDistributedReward 作为哨兵，并提升到循环外
+        // 使用 hasDistributedReward 作为哨兵，并提升到循环外
         bool isFirstReward = !hasDistributedReward;
 
         for (uint256 i = 0; i < len; ) {
             AllocationRecord storage record = records[i];
 
-            // ✅ 防止 Reward Timing Attack：
+            // 防止 Reward Timing Attack：
             // 如果有上一次奖励，只有在上一次奖励之前就已存在的分配才能参与本次奖励
-            // ✅ 修复问题Y：使用 hasDistributedReward 作为哨兵，防止 lastRewardActiveEquivalent 降至 0 后被重置
+            // 使用 hasDistributedReward 作为哨兵，防止 lastRewardActiveEquivalent 降至 0 后被重置
             if (!isFirstReward && record.timestamp >= lastReward) {
                 unchecked { ++i; }
                 continue;
             }
 
-            // ✅ Critical 修复：防止首次奖励时同一区块内分配+奖励攻击
+            // 防止首次奖励时同一区块内分配+奖励攻击
             // 即使是首次奖励，也要求分配记录不在当前区块
             // 这防止攻击者在同一区块内先分配巨额等效值，然后立即调用 configRewards
             if (isFirstReward && record.timestamp == block.timestamp) {
@@ -1860,11 +1850,11 @@ contract ServerNodeV2Backup is
             }
 
             if (!found) {
-                // ✅ 修复问题AA：限制单个用户的质押地址数量，防止 gas DoS 和地址拆分攻击
+                // 限制单个用户的质押地址数量，防止 gas DoS 和地址拆分攻击
                 // 超限时截断并标记，不 revert，避免整批奖励失败
                 if (uniqueCount >= MAX_STAKE_ADDRESSES) {
                     stakeAddressLimitExceeded = true;
-                    // ✅ 修复问题AF：超限时不再累加 totalStakeEquivalent
+                    // 超限时不再累加 totalStakeEquivalent
                     // 确保返回值 totalStakeEquivalent == sum(equivalents[])
                     // 继续处理已有记录，但不添加新的质押地址
                     // 该用户将在 configRewards 中被跳过
@@ -1935,20 +1925,19 @@ contract ServerNodeV2Backup is
             uint256 currentDay
         ) = _getCurrentRewardInfo();
         require(dailyReward > 0, "No reward");
-        // ✅ 限制每日奖励上限，防止奖励计算器异常导致资金损失
+        // 限制每日奖励上限，防止奖励计算器异常导致资金损失
         require(dailyReward <= MAX_DAILY_REWARD, "Reward exceeds limit");
 
         // ===== 2️⃣ 第一轮：计算有效总等效值并缓存质押信息 =====
-        // ✅ Bug 1 & Bug 2 修复：分母计算逻辑
         // - 首次奖励（hasDistributedReward == false）：使用当前 totalActiveEquivalent
         // - 后续奖励：使用上一次奖励时的快照值 lastRewardActiveEquivalent
-        // ✅ 修复问题Y：使用 hasDistributedReward 作为哨兵，防止 lastRewardActiveEquivalent 降至 0 后被重置
+        // 使用 hasDistributedReward 作为哨兵，防止 lastRewardActiveEquivalent 降至 0 后被重置
         bool isFirstReward = !hasDistributedReward;
         uint256 globalEffectiveTotal = isFirstReward 
             ? totalActiveEquivalent 
             : lastRewardActiveEquivalent;
 
-        // ✅ 缓存每个用户的等效值和质押信息，避免第二轮重复调用
+        // 缓存每个用户的等效值和质押信息，避免第二轮重复调用
         uint256[] memory allTotalEquivalents = new uint256[](length);
         UserStakeCache[] memory stakeCaches = new UserStakeCache[](length);
 
@@ -1969,10 +1958,9 @@ contract ServerNodeV2Backup is
                 continue;
             }
 
-            // ✅ 防止 Allocation State Manipulation Attack：
+            // 防止 Allocation State Manipulation Attack：
             // 用户必须在奖励前 MIN_STAKE_DURATION 内没有改变分配状态
             // 这确保攻击者无法在奖励前临时增加分配来获取更多奖励
-            // ✅ 修复问题C：移除 lastReward > 0 的前置条件
             // 由于 initialize 时已设置 lastRewardTimestamp，此条件永远为 true
             // 现在首次奖励也受 MIN_STAKE_DURATION 保护
             uint256 lastChange = lastAllocationChangeTimestamp[user];
@@ -1984,7 +1972,7 @@ contract ServerNodeV2Backup is
                 continue;
             }
 
-            // ✅ 去重：检查同一批次内是否已经处理过该地址
+            // 去重：检查同一批次内是否已经处理过该地址
             bool isDuplicate = false;
             for (uint256 k = 0; k < i; ) {
                 if (_users[k] == user) {
@@ -2002,8 +1990,8 @@ contract ServerNodeV2Backup is
                 continue;
             }
 
-            // ✅ 获取并缓存该用户 active 节点的质押信息
-            // ✅ 修复问题AA：检测 stakeAddressLimitExceeded 标志，跳过异常用户
+            // 获取并缓存该用户 active 节点的质押信息
+            // 检测 stakeAddressLimitExceeded 标志，跳过异常用户
             (
                 address[] memory _stakeAddresses,
                 uint256[] memory _equivalents,
@@ -2011,7 +1999,7 @@ contract ServerNodeV2Backup is
                 bool _stakeAddressLimitExceeded
             ) = _getStakeAddressesWithEquivalent(user);
 
-            // ✅ 修复问题AA & AB：质押地址超限时跳过该用户并 emit 事件
+            // 质押地址超限时跳过该用户并 emit 事件
             if (_stakeAddressLimitExceeded) {
                 emit RewardUserSkipped(user, 1); // reason=1: StakeAddressLimitExceeded
                 unchecked {
@@ -2032,7 +2020,7 @@ contract ServerNodeV2Backup is
             }
         }
 
-        // ✅ Critical: 使用全局活跃等效值，如果小于 BASENODE 则补底
+        // 使用全局活跃等效值，如果小于 BASENODE 则补底
         if (globalEffectiveTotal < (BASENODE * SCALE)) {
             globalEffectiveTotal = BASENODE * SCALE;
         }
@@ -2052,7 +2040,7 @@ contract ServerNodeV2Backup is
                 continue;
             }
 
-            // ✅ Critical: 使用全局活跃等效值作为分母
+            // 使用全局活跃等效值作为分母
             uint256 reward = (dailyReward * userActiveEquivalent) /
                 globalEffectiveTotal;
             if (reward == 0) {
@@ -2070,7 +2058,7 @@ contract ServerNodeV2Backup is
             }
         }
 
-        // ✅ 将 rounding remainder 留在合约中，用于下一次奖励
+        // 将 rounding remainder 留在合约中，用于下一次奖励
         // 这样可以防止 dust capture attack，同时保持公平
         // remainder = dailyReward - totalRewardNeeded 会留在合约余额中
         // 下一次奖励时会被自动包含在可用余额中
@@ -2109,7 +2097,7 @@ contract ServerNodeV2Backup is
                 continue;
             }
 
-            // ✅ 使用缓存的质押信息，避免重复调用 getStakeAddressesWithEquivalent
+            // 使用缓存的质押信息，避免重复调用 getStakeAddressesWithEquivalent
             UserStakeCache memory cache = stakeCaches[i];
             uint256 totalStakeEquivalent = cache.totalEquivalent;
 
@@ -2173,18 +2161,18 @@ contract ServerNodeV2Backup is
             emit RewardDistributed(user, userReward, currentYear);
         }
 
-        // ✅ Bug 1 修复：只有在有用户被处理时才更新时间边界
+        // 只有在有用户被处理时才更新时间边界
         // 防止空批次调用静默推进时间边界
         // 注意：不 revert，只是跳过更新，保持原有状态
         if (usersProcessed > 0) {
-            // ✅ 修复问题Y：设置已分发奖励标志
+            // 设置已分发奖励标志
             hasDistributedReward = true;
 
-            // ✅ 更新上一次奖励时间戳，用于下一次奖励的 Timing Attack 防护
+            // 更新上一次奖励时间戳，用于下一次奖励的 Timing Attack 防护
             // 下一次奖励只会计算此时间戳之前的分配
             lastRewardTimestamp = block.timestamp;
 
-            // ✅ Bug 2 修复：更新活跃等效值快照
+            // 更新活跃等效值快照
             // 下一次奖励使用此快照作为分母，确保分母与分子的时间过滤一致
             lastRewardActiveEquivalent = totalActiveEquivalent;
         }
@@ -2202,7 +2190,7 @@ contract ServerNodeV2Backup is
      * @return currentYear 当前年份
      * @return currentDay 当前天数
      * 注意：此函数会更新 lastGlobalRewardDay 和 lastDailyRewardSnapshot
-     * ✅ 修复问题AC：同一天多批次调用使用相同的 dailyReward 快照
+     * 同一天多批次调用使用相同的 dailyReward 快照
      */
     function _getCurrentRewardInfo()
         internal
@@ -2210,18 +2198,18 @@ contract ServerNodeV2Backup is
     {
         (uint256 _dailyReward, uint16 _currentYear, uint256 _currentDay) = _getCurrentRewardInfoView();
 
-        // ✅ 防止 currentDay 倒退（重复领取攻击）
+        // 防止 currentDay 倒退（重复领取攻击）
         require(_currentDay >= lastGlobalRewardDay, "Day down");
         
-        // ✅ 修复问题AC：新的一天时更新快照，同一天使用快照值
+        // 新的一天时更新快照，同一天使用快照值
         if (_currentDay > lastGlobalRewardDay) {
             lastGlobalRewardDay = _currentDay;
             lastDailyRewardSnapshot = _dailyReward;
             dailyReward = _dailyReward;
         } else {
             // 同一天，使用快照值
-            // ✅ 修复问题AH：升级场景下 lastDailyRewardSnapshot == 0，使用实时值
-            // ✅ 修复问题AI：同时写入快照，确保同天多批次调用使用相同值
+            // 升级场景下 lastDailyRewardSnapshot == 0，使用实时值
+            // 同时写入快照，确保同天多批次调用使用相同值
             if (lastDailyRewardSnapshot == 0) {
                 lastDailyRewardSnapshot = _dailyReward;
                 dailyReward = _dailyReward;
@@ -2247,7 +2235,7 @@ contract ServerNodeV2Backup is
         view
         returns (uint256 dailyReward, uint16 currentYear, uint256 currentDay)
     {
-        // ✅ 先获取当前天数
+        // 先获取当前天数
         (bool successDay, bytes memory dataDay) = REWARD.staticcall(
             abi.encodeWithSignature("getDaysSinceDeployment()")
         );
@@ -2257,7 +2245,7 @@ contract ServerNodeV2Backup is
         currentDay = abi.decode(dataDay, (uint256));
         require(currentDay > 0, "Day > 0");
 
-        // ✅ 然后获取该天的奖励（会触发事件，但我们用 staticcall 所以不会执行）
+        // 然后获取该天的奖励（会触发事件，但我们用 staticcall 所以不会执行）
         (bool successReward, bytes memory dataReward) = REWARD.staticcall(
             abi.encodeWithSignature("getDailyReward(uint256)", currentDay)
         );
@@ -2266,7 +2254,7 @@ contract ServerNodeV2Backup is
 
         dailyReward = abi.decode(dataReward, (uint256));
 
-        // ✅ 计算当前年份（假设每年365天）
+        // 计算当前年份（假设每年365天）
         // 先用 uint256 计算，校验后再强转，避免截断后检查形同虚设
         uint256 yearRaw = ((currentDay - 1) / 365) + 1;
         require(yearRaw <= type(uint16).max, "Year overflow");
@@ -2370,12 +2358,12 @@ contract ServerNodeV2Backup is
 
         uint256 len = withdrawSigners.length;
 
-        // ✅ 防止删除后签名者数量低于阈值（防止单签风险）
+        // 防止删除后签名者数量低于阈值（防止单签风险）
         if (len <= withdrawThreshold) {
             revert CannotRemoveSignerBelowThreshold();
         }
 
-        // ✅ 防止移除有未执行且未过期提案确认的签名者
+        // 防止移除有未执行且未过期提案确认的签名者
         // 倒序仅扫描“未过期窗口”内提案，避免固定窗口漏检
         for (uint256 i = nextWithdrawProposalId; i > 0; ) {
             unchecked {
@@ -2414,7 +2402,7 @@ contract ServerNodeV2Backup is
             revert SignerNotFoundInArray();
         }
         delete isWithdrawSigner[_signer];
-        // ✅ 修复中危问题3：重置活跃提案计数器，防止重新添加时计数偏高
+        // 重置活跃提案计数器，防止重新添加时计数偏高
         signerActiveProposalCount[_signer] = 0;
 
         emit WithdrawSignerRemoved(_signer);
@@ -2425,11 +2413,11 @@ contract ServerNodeV2Backup is
      * @param _newThreshold 新的阈值
      */
     function updateWithdrawThreshold(uint256 _newThreshold) external onlyOwner {
-        // ✅ Bug B 修复：移除死代码（_newThreshold == 0 已被 <= 1 覆盖）
+        
         if (_newThreshold > withdrawSigners.length) {
             revert ThresholdExceedsSigners();
         }
-        // ✅ 防止阈值设置为 0 或 1（单签风险）
+        // 防止阈值设置为 0 或 1（单签风险）
         if (_newThreshold <= 1) {
             revert ThresholdMustBeGreaterThanOne();
         }
@@ -2457,7 +2445,7 @@ contract ServerNodeV2Backup is
 
     function cleanupExpiredProposals(uint256 maxSteps) public {
         require(maxSteps > 0, "maxSteps > 0");
-        // ✅ 限制清理步数上限，防止 gas 攻击
+        // 限制清理步数上限，防止 gas 攻击
         require(maxSteps <= MAX_CLEANUP_STEPS, "maxSteps exceeds limit");
 
         uint256 proposalCount = nextWithdrawProposalId;
@@ -2471,13 +2459,13 @@ contract ServerNodeV2Backup is
             cursor = proposalCount;
         }
 
-        // ✅ 记录扫描过的提案数量，用于检测是否完成一整圈
+        // 记录扫描过的提案数量，用于检测是否完成一整圈
         // 当 scanned >= proposalCount 时，说明已经扫描了所有提案
         uint256 totalScanned = 0;
 
         uint256 scanned = 0;
         while (scanned < maxSteps && totalScanned < proposalCount) {
-            // ✅ 先判零重置，再递减
+            // 先判零重置，再递减
             // 这样 cursor 访问范围是 N-1 到 0，不会漏掉 proposals[0]
             if (cursor == 0) {
                 cursor = proposalCount;
@@ -2579,7 +2567,7 @@ contract ServerNodeV2Backup is
         WithdrawProposal storage proposal = withdrawProposals[proposalId];
         require(proposal.amount > 0, "No proposal");
         require(!proposal.executed, "Executed");
-        // ✅ 修复中危问题4：检查提案是否已被清理标记为 finalized
+        // 检查提案是否已被清理标记为 finalized
         require(!withdrawProposalFinalized[proposalId], "Finalized");
         require(
             block.timestamp <= proposal.createdAt + PROPOSAL_EXPIRY_TIME,
@@ -2674,7 +2662,7 @@ contract ServerNodeV2Backup is
 
     /**
      * @dev Storage gap for future upgrades
-     * ✅ 保留 40 slot 用于未来升级，防止 storage 冲突
+     * 保留 40 slot 用于未来升级，防止 storage 冲突
      */
     uint256[40] private __gap;
 }

@@ -14,12 +14,6 @@ import "@openzeppelin/contracts/interfaces/IERC1363Spender.sol";
 /**
  * @title BKCERC1363Token
  * @dev 支持冻结账户、批量铸造的 ERC1363 代币合约（OZ v5.1+）
- *
- * 修复记录：
- * 1. ERC1363 回调函数添加 nonReentrant 防重入
- * 2. approveAndCall 回调后清零剩余授权
- * 3. 改用 OZ v5.1+ 标准接口，移除本地手写 interface
- * 4. supportsInterface 补充 IERC20 声明
  */
 contract BKCERC1363Token is ERC20, Ownable, ERC165, ReentrancyGuard, IERC1363 {
     // ========== 错误定义 ==========
@@ -194,9 +188,6 @@ contract BKCERC1363Token is ERC20, Ownable, ERC165, ReentrancyGuard, IERC1363 {
         return _transferAndCall(to, value, data);
     }
 
-    /**
-     * @dev 内部实现，避免 `this` 调用产生的gas开销
-     */
     function _transferAndCall(
         address to,
         uint256 value,
@@ -216,10 +207,6 @@ contract BKCERC1363Token is ERC20, Ownable, ERC165, ReentrancyGuard, IERC1363 {
         return _transferFromAndCall(from, to, value, "");
     }
 
-    /**
-     * IERC1363
-     * fix: 添加 nonReentrant 防止回调重入
-     */
     function transferFromAndCall(
         address from,
         address to,
@@ -229,9 +216,6 @@ contract BKCERC1363Token is ERC20, Ownable, ERC165, ReentrancyGuard, IERC1363 {
         return _transferFromAndCall(from, to, value, data);
     }
 
-    /**
-     * @dev 内部实现，避免 `this` 调用产生的gas开销
-     */
     function _transferFromAndCall(
         address from,
         address to,
@@ -264,9 +248,6 @@ contract BKCERC1363Token is ERC20, Ownable, ERC165, ReentrancyGuard, IERC1363 {
         return _approveAndCall(spender, value, data);
     }
 
-    /**
-     * @dev 内部实现，避免 `this` 调用产生的gas开销
-     */
     function _approveAndCall(
         address spender,
         uint256 value,

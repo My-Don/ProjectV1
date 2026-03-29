@@ -16,6 +16,7 @@ MOONBASE_ALPHA_TESTNET_ETHERSCAN_URL=https://moonbase.moonscan.io/
 MOONBEAM_MAINNET_CHAIN_ID=1284
 MOONBEAM_MAINNET_RPC_URL=https://rpc.api.moonbeam.network
 MOONBEAM_MAINNET_ETHERSCAN_URL=https://moonscan.io/
+POLKADOTETHERSCAN_API_KEY=no-api-key-needed
 POLKADOT_TESTNET_CHAIN_ID=420420417
 POLKADOT_TESTNET_RPC_URL=https://eth-rpc-testnet.polkadot.io/
 POLKADOT_TESTNET_ETHERSCAN_URL=https://blockscout-testnet.polkadot.io/

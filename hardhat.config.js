@@ -198,28 +198,38 @@ module.exports = {
     monadTestnet: {
       url: process.env.MONAD_TESTNET_RPC_URL || "",
       accounts: getAccountsFromEnv("PRIVATE_KEY"),
-      chainId: parseInt(process.env.MONAD_TESTNET_CHAIN_ID) || 10143
+      chainId: parseInt(process.env.MONAD_TESTNET_CHAIN_ID) || 0
     },
     monadMainnet: {
       url: process.env.MONAD_MAINNET_RPC_URL || "",
       accounts: getAccountsFromEnv("PRIVATE_KEY"),
-      chainId: parseInt(process.env.MONAD_MAINNET_CHAIN_ID) || 143
+      chainId: parseInt(process.env.MONAD_MAINNET_CHAIN_ID) || 0
     },
     beechainMainnet: {
       url: process.env.BEE_MAINNET_RPC_URL || "",
       accounts: getAccountsFromEnv("PRIVATE_KEY"),
-      chainId: parseInt(process.env.BEE_MAINNET_CHAIN_ID) || 3188
+      chainId: parseInt(process.env.BEE_MAINNET_CHAIN_ID) || 0
     },
     arbitrumSepolia: {
       url: process.env.ARB_SEPOLIA_RPC_URL || "",
       accounts: getAccountsFromEnv("PRIVATE_KEY"),
-      chainId: parseInt(process.env.ARB_SEPOLIA_CHAIN_ID) || 421614
+      chainId: parseInt(process.env.ARB_SEPOLIA_CHAIN_ID) || 0
     },
     baseSepolia: {
       url: process.env.BASE_SEPOLIA_RPC_URL || "",
       accounts: getAccountsFromEnv("PRIVATE_KEY"),
-      chainId: parseInt(process.env.BASE_SEPOLIA_CHIAN_ID) || 84532
+      chainId: parseInt(process.env.BASE_SEPOLIA_CHIAN_ID) || 0
     },
+    MoonbaseAlphaTestnet: {
+      url: process.env.MOONBASE_ALPHA_TESTNET_RPC_URL || "",
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
+      chainId: parseInt(process.env.MOONBASE_ALPHA_TESTNET_CHAIN_ID) || 0
+    },
+    MoonbeamMainnet: {
+      url: process.env.MOONBEAM_MAINNET_RPC_URL || "",
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
+      chainId: parseInt(process.env.MOONBEAM_MAINNET_CHAIN_ID) || 0
+    }
   },
   etherscan: {
     enabled: true,
@@ -232,7 +242,9 @@ module.exports = {
       sepolia: process.env.ETHERSCAN_API_KEY,
       beechainMainnet: process.env.BEECHAIN_API_KEY,
       arbitrumSepolia: process.env.ETHERSCAN_API_KEY,
-      baseSepolia: process.env.ETHERSCAN_API_KEY
+      baseSepolia: process.env.ETHERSCAN_API_KEY,
+      MoonbaseAlphaTestnet: process.env.ETHERSCAN_API_KEY,
+      MoonbeamMainnet: process.env.ETHERSCAN_API_KEY
     },
     customChains: [
       {
@@ -297,6 +309,22 @@ module.exports = {
         urls: {
           apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.BASE_SEPOLIA_CHAIN_ID)}`,
           browserURL: process.env.BASE_SEPOLIA_ETHERSCAN_URL
+        }
+      },
+      {
+        network: "MoonbaseAlphaTestnet",
+        chainId: parseInt(process.env.MOONBASE_ALPHA_TESTNET_CHAIN_ID),
+        urls: {
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.MOONBASE_ALPHA_TESTNET_CHAIN_ID)}`,
+          browserURL: process.env.MOONBASE_ALPHA_TESTNET_ETHERSCAN_URL
+        }
+      },
+      {
+        network: "MoonbeamMainnet",
+        chainId: parseInt(process.env.MOONBEAM_MAINNET_CHAIN_ID),
+        urls: {
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.MOONBEAM_MAINNET_CHAIN_ID)}`,
+          browserURL: process.env.MOONBEAM_MAINNET_ETHERSCAN_URL
         }
       }
     ]

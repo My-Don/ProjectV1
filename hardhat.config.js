@@ -255,8 +255,8 @@ module.exports = {
       baseSepolia: process.env.ETHERSCAN_API_KEY,
       moonbaseAlphaTestnet: process.env.ETHERSCAN_API_KEY,
       moonbeamMainnet: process.env.ETHERSCAN_API_KEY,
-      polkadotTestnet: process.env.POLKADOTETHERSCAN_API_KEY,
-      polkadotMainnet: process.env.POLKADOTETHERSCAN_API_KEY
+      polkadotTestnet: process.env.POLKADOT_ETHERSCAN_API_KEY,
+      polkadotMainnet: process.env.POLKADOT_ETHERSCAN_API_KEY
     },
     customChains: [
       {

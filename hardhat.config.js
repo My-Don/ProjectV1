@@ -1,61 +1,392 @@
-MAINNET_PRIVATE_KEY=
-MNEMONIC=
-PRIVATE_KEY=623cced897e1f56823186dc254015d754c73f022f1eb51621334e5b698298fee
-PRIVATE_KEY_V2=890571356a0ca5826cf6667f79c875d3af9e879fba47d5bf1d7d858874eb875a
-ETHERSCAN_API_KEY=AXP9QMUT37VG57HNKP67QIRIRMP75SM6IT
-ETHERSCAN_BACKUP_API_KEY=CYUPN3Q66JIMRGQWYUDXJKQH4SX8YIYZMW
-LOCAL_RPC_URL=http://127.0.0.1:8545
-BEE_MAINNET_CHAIN_ID=3188
-BEECHAIN_API_KEY=empty
-BEE_MAINNET_RPC_URL=https://rpc.beechain.ai
-BEECHAIN_API_URL=https://scan.beechain.ai/api
-BEE_MAINNET_ETHERSCAN_URL=https://scan.beechain.ai
-MOONBASE_ALPHA_TESTNET_CHAIN_ID=1287
-MOONBASE_ALPHA_TESTNET_RPC_URL=https://rpc.api.moonbase.moonbeam.network
-MOONBASE_ALPHA_TESTNET_ETHERSCAN_URL=https://moonbase.moonscan.io/
-MOONBEAM_MAINNET_CHAIN_ID=1284
-MOONBEAM_MAINNET_RPC_URL=https://rpc.api.moonbeam.network
-MOONBEAM_MAINNET_ETHERSCAN_URL=https://moonscan.io/
-POLKADOTETHERSCAN_API_KEY=no-api-key-needed
-POLKADOT_TESTNET_CHAIN_ID=420420417
-POLKADOT_TESTNET_RPC_URL=https://eth-rpc-testnet.polkadot.io/
-POLKADOT_TESTNET_ETHERSCAN_URL=https://blockscout-testnet.polkadot.io/
-POLKADOT_TESTNET_BLOCKSCOUT_API_URL=https://blockscout-testnet.polkadot.io/api
-POLKADOT_MAINNET_CHAIN_ID=420420419
-POLKADOT_MAINNET_RPC_URL=https://rpc.polkadot.io
-POLKADOT_MAINNET_ETHERSCAN_URL=https://blockscout.polkadot.io
-POLKADOT_MAINNET_BLOCKSCOUT_API_URL=https://blockscout.polkadot.io/api
-ARB_SEPOLIA_CHAIN_ID=421614
-ARB_SEPOLIA_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc
-ARB_ETHERSCAN_URL=https://sepolia.arbiscan.io/
-BASE_SEPOLIA_CHIAN_ID=84532
-BASE_SEPOLIA_RPC_URL=https://sepolia.base.org
-BASE_ETHERSCAN_URL=https://sepolia.basescan.org/
-SEPOLIA_CHAIN_ID=11155111
-SEPOLIA_BACKUP_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/OAscEeizLDkoQsPtchDSDKSmAfg_kvAP
-SEPOLIA_RPC_URL=https://sepolia.infura.io/v3/e463f6ea90ed48c69b353530d89babb9
-SEPOLIA_ETHERSCAN_URL=https://sepolia.etherscan.io/
-MAINNET_CHIAN_ID=1
-MAINNET_RPC_URL=https://mainnet.infura.io/v3/6619ff7e71ed41d5adadd97e8ab4e5c5
-MAINNET_ALCHEMY_RPC_URL=https://eth-mainnet.g.alchemy.com/v2/OAscEeizLDkoQsPtchDSDKSmAfg_kvAP
-MAINNET_ETHERSCAN_URL=https://etherscan.io/
-BSC_TESTNET_CHAIN_ID=97
-BSC_MAINNET_CHAIN_ID=56
-BSC_SCAN_API_KEY=MXY1D5PZ7J81VAQVZ8UE3GIMK3MQCE5U65
-BSC_SCAN_BACKUP_API_KEY=GP69JEAP2W7YFJT9ZJTEPGQT6Y6KMW44ZN
-BSC_TESTNET_RPC_URL=https://bsc-testnet.infura.io/v3/e463f6ea90ed48c69b353530d89babb9
-BSC_TESTNET_ALCHEMY_RPC_URL=https://bnb-testnet.g.alchemy.com/v2/OAscEeizLDkoQsPtchDSDKSmAfg_kvAP
-BSC_MAINNET_RPC_URL=https://bsc-mainnet.infura.io/v3/e463f6ea90ed48c69b353530d89babb9
-BSC_MAINNET_ALCHEMY_RPC_URL=https://bnb-mainnet.g.alchemy.com/v2/OAscEeizLDkoQsPtchDSDKSmAfg_kvAP
-BSC_MAINNET_BACRUP_RPC_URL=https://bsc-dataseed1.binance.org
-BSC_TESTNET_ETHERSCAN_URL=https://testnet.bscscan.com
-BSC_MAINNET_ETHERSCAN_URL=https://bscscan.com/
-MONAD_TESTNET_CHAIN_ID=10143
-MONAD_MAINNET_CHAIN_ID=143
-MONAD_TESTNET_RPC_URL=https://testnet-rpc.monad.xyz
-MONAD_MAINNET_RPC_URL=https://rpc1.monad.xyz
-MONAD_TESTNET_ETHERSCAN_URL=https://testnet.monadscan.xyz/
-MONAD_MAINNET_ETHERSCAN_URL=https://monadscan.xyz/
-GAS_PRICE_API=https://api.etherscan.io/api?module=proxy&action=eth_gasPrice
-COINMARKETCAP_API_KEY=
-REPORT_GAS=false
+require("@nomicfoundation/hardhat-toolbox");
+require("@openzeppelin/hardhat-upgrades");
+require("solidity-coverage");
+require("dotenv").config();
+require("hardhat-contract-sizer");
+
+function getAccountsFromEnv(envKey) {
+  const rawKey = process.env[envKey] || "";
+  if (!rawKey) return [];
+  const normalized = rawKey.startsWith("0x") ? rawKey : `0x${rawKey}`;
+  if (normalized.length !== 66) return [];
+  return [normalized];
+}
+
+// 配置hardhat accounts参数
+task("accounts", "Prints the list of accounts", async (taskArgs, hre) => {
+  const accounts = await hre.ethers.getSigners();
+
+  for (const account of accounts) {
+    console.log(account.address);
+  }
+});
+
+
+
+/** @type import('hardhat/config').HardhatUserConfig */
+module.exports = {
+  solidity: {
+    compilers: [
+      {
+        version: "0.8.22",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 1
+          },
+          viaIR: true,
+          metadata: {
+            bytecodeHash: "none"
+          }
+        }
+      },
+      {
+        version: "0.8.25",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 1
+          },
+          viaIR: true,
+          metadata: {
+            bytecodeHash: "none"
+          }
+        }
+      },
+      {
+        version: "0.8.0",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 2000
+          },
+          viaIR: true
+        }
+      },
+      {
+        version: "0.8.20",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 1
+          },
+          viaIR: true,
+          metadata: {
+            bytecodeHash: "none"
+          }
+        }
+      },
+      {
+        version: "0.6.6",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200
+          }
+        }
+      },
+      {
+        version: "0.6.2",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200
+          }
+        }
+      },
+      {
+        version: "0.5.17",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200
+          }
+        }
+      },
+      {
+        version: "0.5.16",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200
+          }
+        }
+      },
+      {
+        version: "0.5.0",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200
+          }
+        }
+      },
+      {
+        version: "0.4.19",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200
+          }
+        }
+      },
+      {
+        version: "0.4.24",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200
+          }
+        }
+      },
+    ],
+    /** overrides 的具体作用
+    * optimizer.runs: 1：优先减小 bytecode（牺牲部分运行时 gas）
+    * viaIR: true：很多复杂合约能进一步压缩体积
+    * metadata.bytecodeHash: "none"：去掉元数据哈希，减少字节码长度
+    * debug.revertStrings: "strip"：移除 revert 字符串，显著减小体积（但测试里就拿不到 reason 文本）
+    */
+    overrides: {
+      "contracts/ServerNodeV2Backup.sol": {
+        version: "0.8.20",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 1
+          },
+          viaIR: true,
+          metadata: {
+            bytecodeHash: "none"
+          },
+          debug: {
+            revertStrings: "strip"
+          }
+        }
+      }
+    }
+  },
+  networks: {
+    hardhat: {
+      chainId: 31337
+    },
+    mainnet: {
+      url: process.env.MAINNET_RPC_URL || "",
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
+      chainId: parseInt(process.env.MAINNET_CHIAN_ID) || 1
+    },
+    sepolia: {
+      url: process.env.SEPOLIA_RPC_URL || "",
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
+      chainId: parseInt(process.env.SEPOLIA_CHAIN_ID) || 11155111,
+      timeout: 120000,
+      gasPrice: "auto"
+    },
+    bscTestnet: {
+      url: process.env.BSC_TESTNET_RPC_URL || "",
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
+      chainId: parseInt(process.env.BSC_TESTNET_CHAIN_ID) || 97
+    },
+    bsc: {
+      url: process.env.BSC_MAINNET_RPC_URL || "",
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
+      chainId: parseInt(process.env.BSC_MAINNET_CHAIN_ID) || 56
+    },
+    local: {
+      url: process.env.LOCAL_RPC_URL || "",
+      accounts: getAccountsFromEnv("LOCAL_PRIVATE_KEY")
+    },
+    monadTestnet: {
+      url: process.env.MONAD_TESTNET_RPC_URL || "",
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
+      chainId: parseInt(process.env.MONAD_TESTNET_CHAIN_ID) || 0
+    },
+    monadMainnet: {
+      url: process.env.MONAD_MAINNET_RPC_URL || "",
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
+      chainId: parseInt(process.env.MONAD_MAINNET_CHAIN_ID) || 0
+    },
+    beechainMainnet: {
+      url: process.env.BEE_MAINNET_RPC_URL || "",
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
+      chainId: parseInt(process.env.BEE_MAINNET_CHAIN_ID) || 0
+    },
+    arbitrumSepolia: {
+      url: process.env.ARB_SEPOLIA_RPC_URL || "",
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
+      chainId: parseInt(process.env.ARB_SEPOLIA_CHAIN_ID) || 0
+    },
+    baseSepolia: {
+      url: process.env.BASE_SEPOLIA_RPC_URL || "",
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
+      chainId: parseInt(process.env.BASE_SEPOLIA_CHIAN_ID) || 0
+    },
+    moonbaseAlphaTestnet: {
+      url: process.env.MOONBASE_ALPHA_TESTNET_RPC_URL || "",
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
+      chainId: parseInt(process.env.MOONBASE_ALPHA_TESTNET_CHAIN_ID) || 0
+    },
+    moonbeamMainnet: {
+      url: process.env.MOONBEAM_MAINNET_RPC_URL || "",
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
+      chainId: parseInt(process.env.MOONBEAM_MAINNET_CHAIN_ID) || 0
+    },
+    polkadotTestnet: {
+      url: process.env.POLKADOT_TESTNET_RPC_URL || "",
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
+      chainId: parseInt(process.env.POLKADOT_TESTNET_CHAIN_ID) || 420420417,
+    },
+    polkadotMainnet: {
+      url: process.env.POLKADOT_MAINNET_RPC_URL || "",
+      accounts: getAccountsFromEnv("PRIVATE_KEY"),
+      chainId: parseInt(process.env.POLKADOT_MAINNET_CHAIN_ID) || 420420419,
+    }
+  },
+  etherscan: {
+    enabled: true,
+    // 使用新的 v2 API 配置
+    apiKey: {
+      monadMainnet: process.env.ETHERSCAN_API_KEY,
+      monadTestnet: process.env.ETHERSCAN_API_KEY,
+      bsc: process.env.BSC_SCAN_BACKUP_API_KEY,
+      bscTestnet: process.env.BSC_SCAN_BACKUP_API_KEY,
+      sepolia: process.env.ETHERSCAN_API_KEY,
+      beechainMainnet: process.env.BEECHAIN_API_KEY,
+      arbitrumSepolia: process.env.ETHERSCAN_API_KEY,
+      baseSepolia: process.env.ETHERSCAN_API_KEY,
+      moonbaseAlphaTestnet: process.env.ETHERSCAN_API_KEY,
+      moonbeamMainnet: process.env.ETHERSCAN_API_KEY,
+      polkadotTestnet: process.env.POLKADOTETHERSCAN_API_KEY,
+      polkadotMainnet: process.env.POLKADOTETHERSCAN_API_KEY
+    },
+    customChains: [
+      {
+        network: "monadTestnet",
+        chainId: parseInt(process.env.MONAD_TESTNET_CHAIN_ID),
+        urls: {
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.MONAD_TESTNET_CHAIN_ID)}`,
+          browserURL: process.env.MONAD_TESTNET_ETHERSCAN_URL
+        }
+      },
+      {
+        network: "monadMainnet",
+        chainId: parseInt(process.env.MONAD_MAINNET_CHAIN_ID),
+        urls: {
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.MONAD_MAINNET_CHAIN_ID)}`,
+          browserURL: process.env.MONAD_MAINNET_ETHERSCAN_URL
+        }
+      },
+      {
+        network: "bscTestnet",
+        chainId: parseInt(process.env.BSC_TESTNET_CHAIN_ID),
+        urls: {
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.BSC_TESTNET_CHAIN_ID)}`,
+          browserURL: process.env.BSC_TESTNET_ETHERSCAN_URL
+        }
+      },
+      {
+        network: "bsc",
+        chainId: parseInt(process.env.BSC_MAINNET_CHAIN_ID),
+        urls: {
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.BSC_MAINNET_CHAIN_ID)}`,
+          browserURL: process.env.BSC_MAINNET_ETHERSCAN_URL
+        }
+      },
+      {
+        network: "sepolia",
+        chainId: parseInt(process.env.SEPOLIA_CHAIN_ID),
+        urls: {
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.SEPOLIA_CHAIN_ID)}`,
+          browserURL: process.env.SEPOLIA_ETHERSCAN_URL
+        }
+      },
+      {
+        network: "beechainMainnet",
+        chainId: parseInt(process.env.BEE_MAINNET_CHAIN_ID),
+        urls: {
+          apiURL: process.env.BEECHAIN_API_URL,
+          browserURL: process.env.BEECHAIN_ETHERSCAN_URL
+        }
+      },
+      {
+        network: "arbitrumSepolia",
+        chainId: parseInt(process.env.ARB_SEPOLIA_CHAIN_ID),
+        urls: {
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.ARB_SEPOLIA_CHAIN_ID)}`,
+          browserURL: process.env.ARB_SEPOLIA_ETHERSCAN_URL
+        }
+      },
+      {
+        network: "baseSepolia",
+        chainId: parseInt(process.env.BASE_SEPOLIA_CHAIN_ID),
+        urls: {
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.BASE_SEPOLIA_CHAIN_ID)}`,
+          browserURL: process.env.BASE_SEPOLIA_ETHERSCAN_URL
+        }
+      },
+      {
+        network: "moonbaseAlphaTestnet",
+        chainId: parseInt(process.env.MOONBASE_ALPHA_TESTNET_CHAIN_ID),
+        urls: {
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.MOONBASE_ALPHA_TESTNET_CHAIN_ID)}`,
+          browserURL: process.env.MOONBASE_ALPHA_TESTNET_ETHERSCAN_URL
+        }
+      },
+      {
+        network: "moonbeamMainnet",
+        chainId: parseInt(process.env.MOONBEAM_MAINNET_CHAIN_ID),
+        urls: {
+          apiURL: `https://api.etherscan.io/v2/api?chainid=${parseInt(process.env.MOONBEAM_MAINNET_CHAIN_ID)}`,
+          browserURL: process.env.MOONBEAM_MAINNET_ETHERSCAN_URL
+        }
+      },
+      {
+        network: 'polkadotTestnet',
+        chainId: parseInt(process.env.POLKADOT_TESTNET_CHAIN_ID),
+        urls: {
+          apiURL: process.env.POLKADOT_TESTNET_BLOCKSCOUT_API_URL,
+          browserURL: process.env.POLKADOT_TESTNET_ETHERSCAN_URL
+        },
+      },
+      {
+        network: 'polkadotMainnet',
+        chainId: parseInt(process.env.POLKADOT_MAINNET_CHAIN_ID),
+        urls: {
+          apiURL: process.env.POLKADOT_MAINNET_BLOCKSCOUT_API_URL,
+          browserURL: process.env.POLKADOT_MAINNET_ETHERSCAN_URL
+        },
+      }
+    ]
+  },
+  // 覆盖率配置
+  coverage: {
+    enabled: true,
+    exclude: ['test/', 'node_modules/', 'coverage/', 'scripts/'],
+    reporter: ['html', 'lcov', 'text', 'json'],
+    solcoverjs: './.solcover.js',
+  },
+  gasReporter: {
+    enabled: process.env.REPORT_GAS ? true : false,
+    currency: 'USD',
+    gasPrice: 20, // Gwei
+    coinmarketcap: process.env.COINMARKETCAP_API_KEY,
+    token: 'ETH',
+    outputFile: 'gas-report.txt',
+    noColors: true,
+    // 排除一些测试文件
+    excludeContracts: ['Test', 'Mock'],
+  },
+  mocha: {
+    timeout: 40000
+  },
+  sourcify: {
+    enabled: false,
+    apiUrl: "https://sourcify.dev/server/",
+    browserUrl: "https://sourcify.dev"
+  },
+  paths: {
+    sources: "./contracts",
+    tests: "./test",
+    cache: "./cache",
+    artifacts: "./artifacts"
+  }
+};

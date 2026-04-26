@@ -13,63 +13,84 @@ async function main() {
     console.log("========================================");
 
     /**
-     * ==============================
-     * 部署参数
-     * ==============================
+     * =====================================================
+     * 合约部署参数
+     * =====================================================
      *
      * 注意：
-     * 最终版合约里的 initialSupplyRaw / maxSupplyRaw 都是 raw units。
-     * 也就是如果 ERC20 是 18 位精度：
+     * 最终版合约里的 initialSupplyRaw / maxSupplyRaw
+     * 都是 raw units，也就是最小单位。
      *
-     * 600,000,000 BKC = 600000000 * 10^18
+     * ERC20 默认 decimals = 18。
      *
-     * 所以这里用 ethers.parseUnits("600000000", 18)
+     * 所以：
+     * 1 个 BKC = 1 * 10^18
+     * 600,000,000 个 BKC = 600000000 * 10^18
      */
 
+    // 代币名称
     const TOKEN_NAME = process.env.TOKEN_NAME || "BKC Token";
+
+    // 代币简称
     const TOKEN_SYMBOL = process.env.TOKEN_SYMBOL || "BKC";
 
     // 初始发行量：6 亿枚 BKC
     const INITIAL_SUPPLY = process.env.INITIAL_SUPPLY || "600000000";
 
-    // 最大供应量：默认 10 亿枚 BKC，你可以按项目需要修改
+    // 最大供应量：10 亿枚 BKC
+    // 如果你不想后续继续增发，可以改成和 INITIAL_SUPPLY 一样：600000000
     const MAX_SUPPLY = process.env.MAX_SUPPLY || "1000000000";
 
-    // ERC20 默认 decimals 是 18
+    // ERC20 默认精度是 18
     const DECIMALS = 18;
 
+    // 把普通数量转换成 raw units
     const initialSupplyRaw = ethers.parseUnits(INITIAL_SUPPLY, DECIMALS);
     const maxSupplyRaw = ethers.parseUnits(MAX_SUPPLY, DECIMALS);
 
-    // 管理员地址，生产环境建议填多签地址
+    // 初始管理员地址
+    // 这个地址会拿到 DEFAULT_ADMIN_ROLE、MINTER_ROLE、FREEZER_ROLE
+    // 生产环境建议换成多签钱包地址
     const admin = process.env.ADMIN_ADDRESS || deployer.address;
 
-    // Default Admin 转移延迟，单位是秒
-    // 1 days = 86400
+    // 默认管理员权限转移延迟，单位：秒
+    // 86400 秒 = 1 天
     const adminTransferDelay = Number(
         process.env.ADMIN_TRANSFER_DELAY || 24 * 60 * 60
     );
 
+    /**
+     * =====================================================
+     * 参数检查
+     * =====================================================
+     */
+
     if (!ethers.isAddress(admin)) {
-        throw new Error(`ADMIN_ADDRESS 非法: ${admin}`);
+        throw new Error(`管理员地址不合法: ${admin}`);
     }
 
     if (initialSupplyRaw > maxSupplyRaw) {
-        throw new Error("INITIAL_SUPPLY 不能大于 MAX_SUPPLY");
+        throw new Error("初始发行量不能大于最大供应量");
     }
 
     if (!Number.isSafeInteger(adminTransferDelay) || adminTransferDelay < 0) {
-        throw new Error("ADMIN_TRANSFER_DELAY 必须是安全的非负整数秒数");
+        throw new Error("管理员转移延迟必须是安全的非负整数");
     }
 
     console.log("部署参数:");
-    console.log("Token Name:", TOKEN_NAME);
-    console.log("Token Symbol:", TOKEN_SYMBOL);
-    console.log("Initial Supply:", INITIAL_SUPPLY, TOKEN_SYMBOL);
-    console.log("Max Supply:", MAX_SUPPLY, TOKEN_SYMBOL);
-    console.log("Admin:", admin);
-    console.log("Admin Transfer Delay:", adminTransferDelay, "seconds");
+    console.log("代币名称:", TOKEN_NAME);
+    console.log("代币简称:", TOKEN_SYMBOL);
+    console.log("初始发行量:", INITIAL_SUPPLY, TOKEN_SYMBOL);
+    console.log("最大供应量:", MAX_SUPPLY, TOKEN_SYMBOL);
+    console.log("管理员地址:", admin);
+    console.log("管理员转移延迟:", adminTransferDelay, "秒");
     console.log("========================================");
+
+    /**
+     * =====================================================
+     * 部署合约
+     * =====================================================
+     */
 
     const BKCERC1363Token = await ethers.getContractFactory("BKCERC1363Token");
 
@@ -98,8 +119,11 @@ async function main() {
     console.log("========================================");
 
     /**
-     * 读取部署后的基本信息，确认部署结果
+     * =====================================================
+     * 部署后读取链上数据，确认部署没问题
+     * =====================================================
      */
+
     const name = await token.name();
     const symbol = await token.symbol();
     const decimals = await token.decimals();
@@ -111,15 +135,26 @@ async function main() {
     console.log("Name:", name);
     console.log("Symbol:", symbol);
     console.log("Decimals:", decimals.toString());
-    console.log("Total Supply:", ethers.formatUnits(totalSupply, decimals), symbol);
-    console.log("Cap:", ethers.formatUnits(cap, decimals), symbol);
+    console.log(
+        "Total Supply:",
+        ethers.formatUnits(totalSupply, decimals),
+        symbol
+    );
+    console.log(
+        "Max Supply Cap:",
+        ethers.formatUnits(cap, decimals),
+        symbol
+    );
     console.log("Frozen Count:", frozenCount.toString());
 
     console.log("========================================");
 
     /**
-     * 读取角色，确认 admin 是否拥有初始权限
+     * =====================================================
+     * 检查管理员角色
+     * =====================================================
      */
+
     const DEFAULT_ADMIN_ROLE = await token.DEFAULT_ADMIN_ROLE();
     const MINTER_ROLE = await token.MINTER_ROLE();
     const FREEZER_ROLE = await token.FREEZER_ROLE();
@@ -128,30 +163,35 @@ async function main() {
     const hasMinterRole = await token.hasRole(MINTER_ROLE, admin);
     const hasFreezerRole = await token.hasRole(FREEZER_ROLE, admin);
 
-    console.log("角色确认:");
-    console.log("Admin has DEFAULT_ADMIN_ROLE:", hasDefaultAdminRole);
-    console.log("Admin has MINTER_ROLE:", hasMinterRole);
-    console.log("Admin has FREEZER_ROLE:", hasFreezerRole);
+    console.log("角色检查:");
+    console.log("管理员拥有 DEFAULT_ADMIN_ROLE:", hasDefaultAdminRole);
+    console.log("管理员拥有 MINTER_ROLE:", hasMinterRole);
+    console.log("管理员拥有 FREEZER_ROLE:", hasFreezerRole);
 
     console.log("========================================");
 
     /**
+     * =====================================================
      * 可选：自动验证合约
+     * =====================================================
      *
-     * 需要你安装并配置 hardhat verify 插件，例如：
-     * npm install --save-dev @nomicfoundation/hardhat-verify
+     * 使用方法：
+     * VERIFY=true npx hardhat run scripts/deploy.js --network sepolia
      *
-     * 并在 hardhat.config.js 里配置 etherscan api key。
+     * 前提：
+     * 你已经安装并配置了 hardhat verify 插件。
      */
+
     const shouldVerify =
         process.env.VERIFY === "true" &&
         network.name !== "hardhat" &&
         network.name !== "localhost";
 
     if (shouldVerify) {
-        console.log("等待几个区块后开始验证合约...");
+        console.log("准备验证合约...");
 
         if (deploymentTx) {
+            console.log("等待 5 个区块后开始验证...");
             await deploymentTx.wait(5);
         }
 

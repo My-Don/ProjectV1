@@ -19,9 +19,6 @@ const path = require("path");
  *   address _uniswapV2Router
  * )
  *
- * 注意：
- * SwapTrade 不是升级合约，所以这里不会用 upgrades。
- * 你上面写了 upgrades，我保留了 require，但实际不用。
  */
 
 function getRequiredEnv(name) {

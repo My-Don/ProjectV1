@@ -1,0 +1,384 @@
+const { ethers } = require("hardhat");
+const fs = require("fs");
+const path = require("path");
+require("dotenv").config();
+
+/**
+ * 简单检查地址
+ */
+function isValidAddress(address) {
+  return typeof address === "string" && ethers.isAddress(address);
+}
+
+/**
+ * 读取环境变量地址
+ * 没填就用默认值
+ */
+function getAddressFromEnv(key, defaultValue) {
+  const value = process.env[key];
+
+  if (!value || value.trim() === "") {
+    return defaultValue;
+  }
+
+  if (!isValidAddress(value)) {
+    throw new Error(`${key} 地址不合法: ${value}`);
+  }
+
+  return value;
+}
+
+/**
+ * 读取数字环境变量
+ */
+function getNumberFromEnv(key, defaultValue) {
+  const value = process.env[key];
+
+  if (!value || value.trim() === "") {
+    return defaultValue;
+  }
+
+  const num = Number(value);
+
+  if (!Number.isFinite(num) || num < 0) {
+    throw new Error(`${key} 数值不合法: ${value}`);
+  }
+
+  return num;
+}
+
+/**
+ * 读取布尔环境变量
+ */
+function getBoolFromEnv(key, defaultValue) {
+  const value = process.env[key];
+
+  if (!value || value.trim() === "") {
+    return defaultValue;
+  }
+
+  return value.toLowerCase() === "true";
+}
+
+/**
+ * 解析逗号分隔地址列表
+ */
+function getAddressListFromEnv(key) {
+  const value = process.env[key];
+
+  if (!value || value.trim() === "") {
+    return [];
+  }
+
+  const list = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  for (const addr of list) {
+    if (!ethers.isAddress(addr)) {
+      throw new Error(`${key} 里存在非法地址: ${addr}`);
+    }
+  }
+
+  return list;
+}
+
+async function main() {
+  const [deployer] = await ethers.getSigners();
+  const network = await ethers.provider.getNetwork();
+
+  console.log("使用账户地址部署:", deployer.address);
+  console.log("当前网络:", network.name);
+  console.log("Chain ID:", network.chainId.toString());
+
+  const deployerBalance = await ethers.provider.getBalance(deployer.address);
+  console.log("部署账户余额:", ethers.formatEther(deployerBalance), "ETH/BNB");
+
+  // =============================================================
+  // 一、部署参数
+  // =============================================================
+
+  const name = process.env.TOKEN_NAME || "BKC Token";
+  const symbol = process.env.TOKEN_SYMBOL || "BKC";
+
+  // 你的最终合约默认 ERC20 decimals 是 18，因为继承 OpenZeppelin ERC20 没有重写 decimals()
+  const decimals = Number(process.env.TOKEN_DECIMALS || 18);
+
+  // 这里填写不带 18 位小数的人类数量，例如 100000000
+  const totalSupplyText = process.env.TOTAL_SUPPLY || "100000000";
+
+  // 实际传给合约的是带 decimals 的数量
+  const initialSupply = ethers.parseUnits(totalSupplyText, decimals);
+
+  // owner 默认就是部署者
+  const owner = getAddressFromEnv("OWNER", deployer.address);
+
+  // 收税钱包，默认部署者
+  const feeReceiver = getAddressFromEnv("FEE_RECEIVER", deployer.address);
+
+  // Router 地址，不填就是 address(0)
+  // BSC 可填 PancakeSwapV2 Router，测试网/本地可先不填
+  const router = getAddressFromEnv("ROUTER", ethers.ZeroAddress);
+
+  // 分红币地址，例如 USDT/BUSD/USDC，不填就是 address(0)
+  const rewardToken = getAddressFromEnv("REWARD_TOKEN", ethers.ZeroAddress);
+
+  console.log("\n部署参数:");
+  console.log("=".repeat(60));
+  console.log("代币名称:", name);
+  console.log("代币符号:", symbol);
+  console.log("代币精度:", decimals);
+  console.log("初始发行量:", totalSupplyText);
+  console.log("owner:", owner);
+  console.log("feeReceiver:", feeReceiver);
+  console.log("router:", router);
+  console.log("rewardToken:", rewardToken);
+
+  // =============================================================
+  // 二、部署合约
+  // =============================================================
+
+  console.log("\n正在加载合约工厂...");
+
+  // 合约名按你的实际文件路径改
+  // 例如 contracts/AdvancedERC314DividendToken.sol
+  const Token = await ethers.getContractFactory(
+    "contracts/AdvancedERC314DividendToken.sol:AdvancedERC314DividendToken"
+  );
+
+  console.log("合约工厂加载成功");
+
+  console.log("\n正在部署 AdvancedERC314DividendToken...");
+
+  const token = await Token.deploy(
+    name,
+    symbol,
+    initialSupply,
+    owner,
+    feeReceiver,
+    router,
+    rewardToken
+  );
+
+  console.log("等待合约部署确认...");
+  await token.waitForDeployment();
+
+  const tokenAddress = await token.getAddress();
+
+  console.log("\n✅ 部署完成!");
+  console.log("=".repeat(60));
+  console.log("Token 合约地址:", tokenAddress);
+
+  // =============================================================
+  // 三、部署后基础验证
+  // =============================================================
+
+  console.log("\n验证合约基础信息...");
+
+  const deployedName = await token.name();
+  const deployedSymbol = await token.symbol();
+  const deployedTotalSupply = await token.totalSupply();
+  const deployedOwnerBalance = await token.balanceOf(owner);
+
+  console.log("合约 name:", deployedName);
+  console.log("合约 symbol:", deployedSymbol);
+  console.log("合约 totalSupply:", ethers.formatUnits(deployedTotalSupply, decimals));
+  console.log("owner 持币数量:", ethers.formatUnits(deployedOwnerBalance, decimals));
+  console.log("feeReceiver:", await token.feeReceiver());
+  console.log("publicErc314SwapEnabled:", await token.publicErc314SwapEnabled());
+  console.log("publicAmmSwapEnabled:", await token.publicAmmSwapEnabled());
+  console.log("erc314SellByTransferEnabled:", await token.erc314SellByTransferEnabled());
+
+  // =============================================================
+  // 四、可选：设置税费
+  // =============================================================
+
+  const buyTaxBps = getNumberFromEnv("BUY_TAX_BPS", 0);
+  const sellTaxBps = getNumberFromEnv("SELL_TAX_BPS", 0);
+  const transferTaxBps = getNumberFromEnv("TRANSFER_TAX_BPS", 0);
+
+  if (buyTaxBps > 0 || sellTaxBps > 0 || transferTaxBps > 0) {
+    console.log("\n正在设置税费...");
+    console.log("买税:", buyTaxBps, "bps");
+    console.log("卖税:", sellTaxBps, "bps");
+    console.log("转账税:", transferTaxBps, "bps");
+
+    const tx = await token.setTaxes(buyTaxBps, sellTaxBps, transferTaxBps);
+    await tx.wait();
+
+    console.log("✅ 税费设置完成");
+  }
+
+  // =============================================================
+  // 五、可选：设置公开开关
+  // =============================================================
+
+  const enablePublicErc314 = getBoolFromEnv("ENABLE_PUBLIC_ERC314", false);
+  const enablePublicAmm = getBoolFromEnv("ENABLE_PUBLIC_AMM", false);
+  const enableTransferSell = getBoolFromEnv("ENABLE_TRANSFER_SELL", false);
+
+  if (enablePublicErc314) {
+    console.log("\n正在开启 ERC314 公开买卖...");
+    const tx = await token.setPublicErc314SwapEnabled(true);
+    await tx.wait();
+    console.log("✅ ERC314 公开买卖已开启");
+  }
+
+  if (enablePublicAmm) {
+    console.log("\n正在开启 AMM 公开买卖...");
+    const tx = await token.setPublicAmmSwapEnabled(true);
+    await tx.wait();
+    console.log("✅ AMM 公开买卖已开启");
+  }
+
+  if (enableTransferSell) {
+    console.log("\n正在开启 transfer(address(this), amount) 自动卖出...");
+    const tx = await token.setErc314SellByTransferEnabled(true);
+    await tx.wait();
+    console.log("✅ transfer 自动卖出已开启");
+  } else {
+    console.log("\n✅ transfer(address(this), amount) 自动卖出保持关闭，推荐正式上线这样配置");
+  }
+
+  // =============================================================
+  // 六、可选：设置白名单
+  // =============================================================
+
+  const erc314BuyWhitelist = getAddressListFromEnv("ERC314_BUY_WHITELIST");
+  const erc314SellWhitelist = getAddressListFromEnv("ERC314_SELL_WHITELIST");
+  const ammBuyWhitelist = getAddressListFromEnv("AMM_BUY_WHITELIST");
+  const ammSellWhitelist = getAddressListFromEnv("AMM_SELL_WHITELIST");
+
+  if (erc314BuyWhitelist.length > 0) {
+    console.log("\n正在设置 ERC314 买入白名单:", erc314BuyWhitelist.length);
+    const tx = await token.batchSetErc314WhitelistBuy(erc314BuyWhitelist, true);
+    await tx.wait();
+    console.log("✅ ERC314 买入白名单设置完成");
+  }
+
+  if (erc314SellWhitelist.length > 0) {
+    console.log("\n正在设置 ERC314 卖出白名单:", erc314SellWhitelist.length);
+    const tx = await token.batchSetErc314WhitelistSell(erc314SellWhitelist, true);
+    await tx.wait();
+    console.log("✅ ERC314 卖出白名单设置完成");
+  }
+
+  if (ammBuyWhitelist.length > 0) {
+    console.log("\n正在设置 AMM 买入白名单:", ammBuyWhitelist.length);
+    const tx = await token.batchSetAmmWhitelistBuy(ammBuyWhitelist, true);
+    await tx.wait();
+    console.log("✅ AMM 买入白名单设置完成");
+  }
+
+  if (ammSellWhitelist.length > 0) {
+    console.log("\n正在设置 AMM 卖出白名单:", ammSellWhitelist.length);
+    const tx = await token.batchSetAmmWhitelistSell(ammSellWhitelist, true);
+    await tx.wait();
+    console.log("✅ AMM 卖出白名单设置完成");
+  }
+
+  // =============================================================
+  // 七、可选：添加 ERC314 内置池子流动性
+  // =============================================================
+
+  const erc314TokenLiquidityText = process.env.ERC314_TOKEN_LIQUIDITY || "";
+  const erc314NativeLiquidityText = process.env.ERC314_NATIVE_LIQUIDITY || "";
+
+  if (erc314TokenLiquidityText && erc314NativeLiquidityText) {
+    const tokenLiquidity = ethers.parseUnits(erc314TokenLiquidityText, decimals);
+    const nativeLiquidity = ethers.parseEther(erc314NativeLiquidityText);
+
+    console.log("\n准备添加 ERC314 内置池子流动性...");
+    console.log("代币数量:", erc314TokenLiquidityText);
+    console.log("ETH/BNB 数量:", erc314NativeLiquidityText);
+
+    console.log("正在授权合约扣除部署者代币...");
+    const approveTx = await token.approve(tokenAddress, tokenLiquidity);
+    await approveTx.wait();
+    console.log("✅ 授权完成");
+
+    console.log("正在添加 ERC314 流动性...");
+    const addLiqTx = await token.addErc314Liquidity(tokenLiquidity, {
+      value: nativeLiquidity,
+    });
+    await addLiqTx.wait();
+
+    console.log("✅ ERC314 流动性添加完成");
+    console.log("erc314TokenReserve:", ethers.formatUnits(await token.erc314TokenReserve(), decimals));
+    console.log("erc314NativeReserve:", ethers.formatEther(await token.erc314NativeReserve()));
+  }
+
+  // =============================================================
+  // 八、保存部署信息
+  // =============================================================
+
+  const deploymentInfo = {
+    network: network.name,
+    chainId: network.chainId.toString(),
+    deployer: deployer.address,
+    tokenAddress,
+    name,
+    symbol,
+    decimals,
+    totalSupply: totalSupplyText,
+    initialSupplyRaw: initialSupply.toString(),
+    owner,
+    feeReceiver,
+    router,
+    rewardToken,
+    buyTaxBps: buyTaxBps.toString(),
+    sellTaxBps: sellTaxBps.toString(),
+    transferTaxBps: transferTaxBps.toString(),
+    publicErc314SwapEnabled: enablePublicErc314,
+    publicAmmSwapEnabled: enablePublicAmm,
+    erc314SellByTransferEnabled: enableTransferSell,
+    deployedAt: new Date().toISOString(),
+  };
+
+  const deploymentsDir = path.join(__dirname, "..", "deployments", network.name);
+
+  if (!fs.existsSync(deploymentsDir)) {
+    fs.mkdirSync(deploymentsDir, { recursive: true });
+  }
+
+  const filePath = path.join(deploymentsDir, "AdvancedERC314DividendToken.json");
+
+  fs.writeFileSync(filePath, JSON.stringify(deploymentInfo, null, 2));
+
+  console.log("\n✅ 部署信息已保存:");
+  console.log(filePath);
+
+  // =============================================================
+  // 九、最终提示
+  // =============================================================
+
+  console.log("\n部署总结:");
+  console.log("=".repeat(60));
+  console.log("Token:", tokenAddress);
+  console.log("Owner:", owner);
+  console.log("FeeReceiver:", feeReceiver);
+  console.log("Router:", router);
+  console.log("RewardToken:", rewardToken);
+
+  console.log("\n建议正式上线默认保持:");
+  console.log("setErc314SellByTransferEnabled(false)");
+  console.log("setPublicErc314SwapEnabled(false)");
+  console.log("setPublicAmmSwapEnabled(false)");
+
+  console.log("\n白名单阶段结束后再开启:");
+  console.log("setPublicErc314SwapEnabled(true)");
+  console.log("setPublicAmmSwapEnabled(true)");
+}
+
+main()
+  .then(() => process.exit(0))
+  .catch((error) => {
+    console.error("部署失败:", error);
+
+    if (error.transaction) {
+      console.error("交易哈希:", error.transaction.hash);
+    }
+
+    process.exit(1);
+  });

@@ -1,35 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-interface IERC20Lite {
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(address indexed owner, address indexed spender, uint256 value);
+/*
+    依赖 OpenZeppelin 5.x：
+    npm install @openzeppelin/contracts
+*/
 
-    function totalSupply() external view returns (uint256);
-    function balanceOf(address account) external view returns (uint256);
-    function transfer(address to, uint256 amount) external returns (bool);
-    function allowance(address owner, address spender) external view returns (uint256);
-    function approve(address spender, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-}
-
-interface IUniswapV2Factory {
-    function getPair(address tokenA, address tokenB) external view returns (address pair);
-    function createPair(address tokenA, address tokenB) external returns (address pair);
-}
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 
 interface IUniswapV2Router02 {
-    function factory() external pure returns (address);
     function WETH() external pure returns (address);
 
-    function addLiquidityETH(
-        address token,
-        uint256 amountTokenDesired,
-        uint256 amountTokenMin,
-        uint256 amountETHMin,
-        address to,
-        uint256 deadline
-    ) external payable returns (uint256 amountToken, uint256 amountETH, uint256 liquidity);
+    function factory() external pure returns (address);
 
     function swapExactTokensForETHSupportingFeeOnTransferTokens(
         uint256 amountIn,
@@ -45,677 +31,601 @@ interface IUniswapV2Router02 {
         address to,
         uint256 deadline
     ) external payable;
+
+    function addLiquidityETH(
+        address token,
+        uint256 amountTokenDesired,
+        uint256 amountTokenMin,
+        uint256 amountETHMin,
+        address to,
+        uint256 deadline
+    )
+        external
+        payable
+        returns (
+            uint256 amountToken,
+            uint256 amountETH,
+            uint256 liquidity
+        );
+
+    function removeLiquidityETHSupportingFeeOnTransferTokens(
+        address token,
+        uint256 liquidity,
+        uint256 amountTokenMin,
+        uint256 amountETHMin,
+        address to,
+        uint256 deadline
+    ) external returns (uint256 amountETH);
 }
 
-abstract contract OwnableLite {
-    address private _owner;
+interface IUniswapV2Factory {
+    function createPair(address tokenA, address tokenB) external returns (address pair);
 
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-
-    constructor(address initialOwner) {
-        require(initialOwner != address(0), "Owner: zero address");
-        _transferOwnership(initialOwner);
-    }
-
-    function owner() public view returns (address) {
-        return _owner;
-    }
-
-    modifier onlyOwner() {
-        require(owner() == msg.sender, "Owner: caller is not owner");
-        _;
-    }
-
-    function transferOwnership(address newOwner) external onlyOwner {
-        require(newOwner != address(0), "Owner: zero address");
-        _transferOwnership(newOwner);
-    }
-
-    function renounceOwnership() external onlyOwner {
-        _transferOwnership(address(0));
-    }
-
-    function _transferOwnership(address newOwner) internal {
-        address oldOwner = _owner;
-        _owner = newOwner;
-        emit OwnershipTransferred(oldOwner, newOwner);
-    }
+    function getPair(address tokenA, address tokenB) external view returns (address pair);
 }
 
-abstract contract ReentrancyGuardLite {
-    uint256 private constant _NOT_ENTERED = 1;
-    uint256 private constant _ENTERED = 2;
-    uint256 private _status = _NOT_ENTERED;
+contract AdvancedERC314DividendToken is ERC20, AccessControl, ReentrancyGuard, Pausable {
+    // =========================
+    // 一、权限角色
+    // =========================
 
-    modifier nonReentrant() {
-        require(_status != _ENTERED, "ReentrancyGuard: reentrant call");
-        _status = _ENTERED;
-        _;
-        _status = _NOT_ENTERED;
-    }
-}
+    // 税费管理员：可以设置买卖税、转账税、收税钱包
+    bytes32 public constant TAX_MANAGER_ROLE = keccak256("TAX_MANAGER_ROLE");
 
-contract DividendDistributor {
-    uint256 private constant ACCURACY = 1e36;
+    // 白名单管理员：可以设置谁能优先买、优先卖
+    bytes32 public constant WHITELIST_MANAGER_ROLE = keccak256("WHITELIST_MANAGER_ROLE");
 
-    address public immutable token;
+    // 冻结管理员：可以冻结/解冻账户
+    bytes32 public constant FREEZER_ROLE = keccak256("FREEZER_ROLE");
 
-    struct Share {
-        uint256 amount;
-        uint256 totalExcluded;
-        uint256 totalRealised;
-        uint256 unpaid;
-    }
+    // 暂停管理员：可以暂停/恢复合约转账
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
-    mapping(address => Share) public shares;
-    address[] public shareholders;
-    mapping(address => uint256) public shareholderIndexes;
-    mapping(address => bool) public shareholderExists;
-    mapping(address => uint256) public shareholderClaims;
+    // 分红管理员：可以设置分红参数、发放分红
+    bytes32 public constant DIVIDEND_MANAGER_ROLE = keccak256("DIVIDEND_MANAGER_ROLE");
 
-    uint256 public totalShares;
-    uint256 public totalDividends;
-    uint256 public totalDistributed;
-    uint256 public dividendsPerShare;
-    uint256 public minPeriod = 1 hours;
-    uint256 public minDistribution = 0.001 ether;
-    uint256 public currentIndex;
-    uint256 public undistributedDividends;
+    // 流动性管理员：可以管理 ERC314 池子和 UniswapV2 流动性
+    bytes32 public constant LIQUIDITY_MANAGER_ROLE = keccak256("LIQUIDITY_MANAGER_ROLE");
 
-    event DistributionCriteriaUpdated(uint256 minPeriod, uint256 minDistribution);
-    event Deposit(uint256 amount, uint256 totalAllocated);
-    event ShareUpdated(address indexed shareholder, uint256 previousAmount, uint256 newAmount);
-    event DividendPaid(address indexed shareholder, uint256 amount);
+    // =========================
+    // 二、基础参数
+    // =========================
 
-    modifier onlyToken() {
-        require(msg.sender == token, "Distributor: only token");
-        _;
-    }
+    // 最大税费，防止管理员把税设置得离谱
+    uint256 public constant MAX_TAX_BPS = 2_000; // 20%
 
-    constructor(address token_) {
-        require(token_ != address(0), "Distributor: zero token");
-        token = token_;
-    }
-
-    receive() external payable {
-        // ETH sent directly is kept until the token calls deposit(). Prefer token.depositETHDividends().
-        undistributedDividends += msg.value;
-    }
-
-    function setDistributionCriteria(uint256 minPeriod_, uint256 minDistribution_) external onlyToken {
-        minPeriod = minPeriod_;
-        minDistribution = minDistribution_;
-        emit DistributionCriteriaUpdated(minPeriod_, minDistribution_);
-    }
-
-    function setShare(address shareholder, uint256 amount) external onlyToken {
-        if (shareholder == address(0)) return;
-
-        Share storage share = shares[shareholder];
-        uint256 previousAmount = share.amount;
-
-        if (previousAmount > 0) {
-            uint256 unpaidNow = _getUnpaidEarningsWithoutStored(shareholder);
-            if (unpaidNow > 0) {
-                share.unpaid += unpaidNow;
-            }
-        }
-
-        if (amount > 0 && !shareholderExists[shareholder]) {
-            _addShareholder(shareholder);
-        } else if (amount == 0 && shareholderExists[shareholder]) {
-            _removeShareholder(shareholder);
-        }
-
-        totalShares = totalShares - previousAmount + amount;
-        share.amount = amount;
-        share.totalExcluded = _getCumulativeDividends(amount);
-
-        emit ShareUpdated(shareholder, previousAmount, amount);
-    }
-
-    function deposit() external payable onlyToken {
-        uint256 amount = msg.value + undistributedDividends;
-        if (amount == 0) return;
-
-        if (totalShares == 0) {
-            undistributedDividends = amount;
-            emit Deposit(msg.value, 0);
-            return;
-        }
-
-        undistributedDividends = 0;
-        totalDividends += amount;
-        dividendsPerShare += (amount * ACCURACY) / totalShares;
-        emit Deposit(msg.value, amount);
-    }
-
-    function process(uint256 gas) external onlyToken returns (uint256 iterations, uint256 claims, uint256 lastProcessedIndex) {
-        uint256 shareholderTotal = shareholders.length;
-        if (shareholderTotal == 0) {
-            return (0, 0, currentIndex);
-        }
-
-        uint256 gasUsed = 0;
-        uint256 gasLeft = gasleft();
-
-        while (gasUsed < gas && iterations < shareholderTotal) {
-            if (currentIndex >= shareholderTotal) {
-                currentIndex = 0;
-            }
-
-            address shareholder = shareholders[currentIndex];
-            if (_shouldDistribute(shareholder)) {
-                if (_distributeDividend(shareholder)) {
-                    claims++;
-                }
-            }
-
-            uint256 newGasLeft = gasleft();
-            if (gasLeft > newGasLeft) {
-                gasUsed += gasLeft - newGasLeft;
-            }
-            gasLeft = newGasLeft;
-            currentIndex++;
-            iterations++;
-        }
-
-        lastProcessedIndex = currentIndex;
-    }
-
-    function claim(address shareholder) external onlyToken returns (uint256 amount) {
-        amount = _claim(shareholder);
-    }
-
-    function getUnpaidEarnings(address shareholder) public view returns (uint256) {
-        Share storage share = shares[shareholder];
-        return share.unpaid + _getUnpaidEarningsWithoutStored(shareholder);
-    }
-
-    function shareholderCount() external view returns (uint256) {
-        return shareholders.length;
-    }
-
-    function _shouldDistribute(address shareholder) internal view returns (bool) {
-        return shareholderClaims[shareholder] + minPeriod <= block.timestamp && getUnpaidEarnings(shareholder) >= minDistribution;
-    }
-
-    function _claim(address shareholder) internal returns (uint256 amount) {
-        amount = getUnpaidEarnings(shareholder);
-        if (amount == 0) return 0;
-
-        Share storage share = shares[shareholder];
-        share.unpaid = 0;
-        share.totalExcluded = _getCumulativeDividends(share.amount);
-
-        (bool success, ) = payable(shareholder).call{value: amount}("");
-        if (!success) {
-            share.unpaid = amount;
-            return 0;
-        }
-
-        totalDistributed += amount;
-        shareholderClaims[shareholder] = block.timestamp;
-        share.totalRealised += amount;
-        emit DividendPaid(shareholder, amount);
-    }
-
-    function _distributeDividend(address shareholder) internal returns (bool) {
-        return _claim(shareholder) > 0;
-    }
-
-    function _getUnpaidEarningsWithoutStored(address shareholder) internal view returns (uint256) {
-        Share storage share = shares[shareholder];
-        if (share.amount == 0) return 0;
-
-        uint256 cumulative = _getCumulativeDividends(share.amount);
-        if (cumulative <= share.totalExcluded) return 0;
-        return cumulative - share.totalExcluded;
-    }
-
-    function _getCumulativeDividends(uint256 share) internal view returns (uint256) {
-        return (share * dividendsPerShare) / ACCURACY;
-    }
-
-    function _addShareholder(address shareholder) internal {
-        shareholderIndexes[shareholder] = shareholders.length;
-        shareholders.push(shareholder);
-        shareholderExists[shareholder] = true;
-    }
-
-    function _removeShareholder(address shareholder) internal {
-        uint256 index = shareholderIndexes[shareholder];
-        address last = shareholders[shareholders.length - 1];
-
-        shareholders[index] = last;
-        shareholderIndexes[last] = index;
-        shareholders.pop();
-
-        shareholderExists[shareholder] = false;
-        delete shareholderIndexes[shareholder];
-    }
-}
-
-contract AdvancedReflectiveDividendToken is OwnableLite, ReentrancyGuardLite, IERC20Lite {
-    uint256 private constant MAX = type(uint256).max;
+    // 手续费分母，10000 = 100%
     uint256 public constant BPS_DENOMINATOR = 10_000;
-    uint16 public constant HARD_MAX_TOTAL_FEE_BPS = 2_000; // 20% absolute ceiling.
 
-    string private _name;
-    string private _symbol;
-    uint8 private constant _DECIMALS = 18;
+    // 收税钱包
+    address public feeReceiver;
 
-    uint256 private _tTotal;
-    uint256 private _rTotal;
-    uint256 private _tFeeTotal;
+    // 买入税，单位 bps，例如 300 = 3%
+    uint256 public buyTaxBps;
 
-    mapping(address => uint256) private _rOwned;
-    mapping(address => uint256) private _tOwned;
-    mapping(address => mapping(address => uint256)) private _allowances;
+    // 卖出税，单位 bps
+    uint256 public sellTaxBps;
 
-    mapping(address => bool) private _isExcludedFromReflection;
-    address[] private _excludedFromReflection;
+    // 普通转账税，单位 bps
+    uint256 public transferTaxBps;
 
-    struct FeeRates {
-        uint16 reflection;
-        uint16 liquidity;
-        uint16 dividend;
-        uint16 treasury;
-    }
+    // 免税地址
+    mapping(address => bool) public isTaxExempt;
 
-    struct TransferValues {
-        uint256 tTransferAmount;
-        uint256 tReflection;
-        uint256 tLiquidity;
-        uint256 tDividend;
-        uint256 tTreasury;
-        uint256 tContract;
-        uint256 rAmount;
-        uint256 rTransferAmount;
-        uint256 rReflection;
-        uint256 rContract;
-    }
-
-    FeeRates public buyFees;
-    FeeRates public sellFees;
-    FeeRates public transferFees;
-    uint16 public maxTotalFeeBps = 1_500; // Owner can only lower this ceiling.
-
-    mapping(address => bool) public isFeeExempt;
+    // 冻结地址
     mapping(address => bool) public isFrozen;
-    mapping(address => bool) public earlyBuyWhitelist;
-    mapping(address => bool) public automatedMarketMakerPairs;
-    mapping(address => bool) public isDividendExempt;
 
-    bool public tradingEnabled;
-    bool public whitelistBuyingEnabled;
-    uint64 public whitelistBuyingEndsAt;
-    bool public freezeFeatureLocked;
+    // 自动做市商交易对地址，例如 PancakeSwap pair
+    mapping(address => bool) public isAmmPair;
 
-    IUniswapV2Router02 public uniswapV2Router;
-    address public uniswapV2Pair;
-    DividendDistributor public dividendDistributor;
+    // =========================
+    // 三、白名单优先买卖
+    // =========================
 
-    address public treasuryWallet;
-    address public liquidityReceiver;
+    // 公开 ERC314 买卖是否开启
+    bool public publicErc314SwapEnabled;
 
-    uint256 public tokensForLiquidity;
-    uint256 public tokensForDividends;
-    uint256 public tokensForTreasury;
-    uint256 public swapTokensAtAmount;
-    uint256 public maxSwapTokensAtOnce;
-    bool public swapEnabled = true;
-    bool private swapping;
+    // 是否允许“转币到合约地址就卖出”
+    bool public erc314SellByTransferEnabled;
 
-    uint256 public processDividendGas; // 0 disables automatic processing during transfers.
-    uint256 public treasuryPendingETH;
-    bool private processingDividends;
+    // 白名单买入地址
+    mapping(address => bool) public whitelistBuy;
 
-    event FeesUpdated(
-        uint16 buyReflection,
-        uint16 buyLiquidity,
-        uint16 buyDividend,
-        uint16 buyTreasury,
-        uint16 sellReflection,
-        uint16 sellLiquidity,
-        uint16 sellDividend,
-        uint16 sellTreasury,
-        uint16 transferReflection,
-        uint16 transferLiquidity,
-        uint16 transferDividend,
-        uint16 transferTreasury
-    );
-    event MaxTotalFeeBpsLowered(uint16 newMaxTotalFeeBps);
-    event FeeExemptionUpdated(address indexed account, bool exempt);
-    event FrozenUpdated(address indexed account, bool frozen);
-    event FreezeFeatureLocked();
-    event EarlyBuyWhitelistUpdated(address indexed account, bool allowed);
-    event WhitelistBuyingConfigured(bool enabled, uint64 endsAt);
-    event TradingEnabled(uint256 timestamp);
-    event RouterUpdated(address indexed router, address indexed pair);
-    event AutomatedMarketMakerPairUpdated(address indexed pair, bool enabled);
-    event DividendExemptionUpdated(address indexed account, bool exempt);
-    event ReflectionExclusionUpdated(address indexed account, bool excluded);
-    event SwapSettingsUpdated(bool enabled, uint256 swapTokensAtAmount, uint256 maxSwapTokensAtOnce);
-    event WalletsUpdated(address indexed treasuryWallet, address indexed liquidityReceiver);
-    event SwapBack(uint256 tokensSwapped, uint256 ethReceived, uint256 ethToDividends, uint256 ethToTreasury, uint256 ethToLiquidity);
-    event TreasuryETHPending(uint256 amount);
-    event LiquidityAdded(uint256 tokenAmount, uint256 ethAmount);
-    event ETHDividendsDeposited(uint256 amount);
-    event DividendProcessed(uint256 iterations, uint256 claims, uint256 lastProcessedIndex);
+    // 白名单卖出/兑换地址
+    mapping(address => bool) public whitelistSell;
+
+    // =========================
+    // 四、ERC314 风格池子参数
+    // =========================
+
+    /*
+        ERC314 常见玩法：
+        1. 用户直接给合约转 ETH/BNB，合约按内部池子价格给用户发币。
+        2. 用户把代币转给合约，合约按内部池子价格给用户返 ETH/BNB。
+        3. 内部价格使用 x * y = k 的 AMM 公式。
+    */
+
+    // ERC314 池子里的原生币储备，例如 ETH/BNB
+    uint256 public erc314NativeReserve;
+
+    // ERC314 池子里的代币储备
+    uint256 public erc314TokenReserve;
+
+    // ERC314 池子交易手续费，默认 30 = 0.3%
+    uint256 public erc314SwapFeeBps = 30;
+
+    // =========================
+    // 五、UniswapV2 / PancakeSwapV2
+    // =========================
+
+    IUniswapV2Router02 public router;
+
+    address public mainPair;
+
+    // =========================
+    // 六、分红参数
+    // =========================
+
+    /*
+        这里使用“每股累计分红”的方式。
+        好处：
+        - 不需要循环所有持币人。
+        - 用户自己 claim 分红。
+        - 比直接遍历所有地址更安全。
+    */
+
+    IERC20 public rewardToken;
+
+    uint256 private constant MAGNITUDE = 2 ** 128;
+
+    // 每 1 个有效持仓累计可以分到多少奖励，放大 MAGNITUDE 倍，避免小数问题
+    uint256 public magnifiedDividendPerShare;
+
+    // 每个地址的有效分红持仓
+    mapping(address => uint256) public dividendShares;
+
+    // 每个地址已经记账过的分红债务
+    mapping(address => uint256) public dividendDebt;
+
+    // 每个地址尚未领取的分红
+    mapping(address => uint256) public pendingDividends;
+
+    // 总有效分红持仓
+    uint256 public totalDividendShares;
+
+    // 是否排除分红
+    mapping(address => bool) public isDividendExcluded;
+
+    // 累计发放分红数量
+    uint256 public totalDividendsDistributed;
+
+    // 累计领取分红数量
+    uint256 public totalDividendsClaimed;
+
+    // =========================
+    // 七、事件
+    // =========================
+
+    event TaxesUpdated(uint256 buyTaxBps, uint256 sellTaxBps, uint256 transferTaxBps);
+    event FeeReceiverUpdated(address indexed feeReceiver);
+
+    event Frozen(address indexed account, bool frozen);
+    event TaxExemptUpdated(address indexed account, bool exempt);
+
+    event PublicErc314SwapUpdated(bool enabled);
+    event Erc314SellByTransferUpdated(bool enabled);
+    event WhitelistBuyUpdated(address indexed account, bool enabled);
+    event WhitelistSellUpdated(address indexed account, bool enabled);
+
+    event Erc314LiquidityAdded(address indexed provider, uint256 tokenAmount, uint256 nativeAmount);
+    event Erc314LiquidityRemoved(address indexed receiver, uint256 tokenAmount, uint256 nativeAmount);
+    event Erc314Buy(address indexed buyer, uint256 nativeIn, uint256 tokenOut);
+    event Erc314Sell(address indexed seller, uint256 tokenIn, uint256 nativeOut);
+
+    event RouterUpdated(address indexed router);
+    event AmmPairUpdated(address indexed pair, bool enabled);
+
+    event RewardTokenUpdated(address indexed rewardToken);
+    event DividendExcludedUpdated(address indexed account, bool excluded);
+    event DividendsDistributed(address indexed from, uint256 amount);
+    event DividendsClaimed(address indexed account, uint256 amount);
+
+    // =========================
+    // 八、构造函数
+    // =========================
 
     constructor(
         string memory name_,
         string memory symbol_,
-        uint256 totalSupply_,
+        uint256 initialSupply_,
+        address owner_,
+        address feeReceiver_,
         address router_,
-        address treasuryWallet_,
-        address liquidityReceiver_
-    ) OwnableLite(msg.sender) {
-        require(totalSupply_ > 0, "Token: zero supply");
-        require(treasuryWallet_ != address(0), "Token: zero treasury");
-        require(liquidityReceiver_ != address(0), "Token: zero liquidity receiver");
+        address rewardToken_
+    ) ERC20(name_, symbol_) {
+        require(owner_ != address(0), "owner is zero");
+        require(feeReceiver_ != address(0), "feeReceiver is zero");
 
-        _name = name_;
-        _symbol = symbol_;
-        _tTotal = totalSupply_;
-        _rTotal = MAX - (MAX % _tTotal);
+        feeReceiver = feeReceiver_;
 
-        treasuryWallet = treasuryWallet_;
-        liquidityReceiver = liquidityReceiver_;
+        // 给部署指定的 owner 分配所有权限
+        _grantRole(DEFAULT_ADMIN_ROLE, owner_);
+        _grantRole(TAX_MANAGER_ROLE, owner_);
+        _grantRole(WHITELIST_MANAGER_ROLE, owner_);
+        _grantRole(FREEZER_ROLE, owner_);
+        _grantRole(PAUSER_ROLE, owner_);
+        _grantRole(DIVIDEND_MANAGER_ROLE, owner_);
+        _grantRole(LIQUIDITY_MANAGER_ROLE, owner_);
 
-        // Conservative defaults: buys/sells 7%, wallet transfers 1%.
-        buyFees = FeeRates({reflection: 200, liquidity: 100, dividend: 200, treasury: 200});
-        sellFees = FeeRates({reflection: 200, liquidity: 200, dividend: 300, treasury: 200});
-        transferFees = FeeRates({reflection: 100, liquidity: 0, dividend: 0, treasury: 0});
+        // 铸造初始总量
+        _mint(owner_, initialSupply_);
 
-        swapTokensAtAmount = totalSupply_ / 10_000; // 0.01% of supply.
-        maxSwapTokensAtOnce = totalSupply_ / 1_000; // 0.1% of supply.
+        // 默认部署者、合约自己、收税钱包免税
+        isTaxExempt[owner_] = true;
+        isTaxExempt[address(this)] = true;
+        isTaxExempt[feeReceiver_] = true;
 
-        dividendDistributor = new DividendDistributor(address(this));
-
-        _rOwned[msg.sender] = _rTotal;
-
-        isFeeExempt[msg.sender] = true;
-        isFeeExempt[address(this)] = true;
-        isFeeExempt[treasuryWallet_] = true;
-
-        isDividendExempt[address(this)] = true;
-        isDividendExempt[treasuryWallet_] = true;
-        isDividendExempt[liquidityReceiver_] = true;
-
-        _excludeFromReflectionInternal(address(this));
-        _excludeFromReflectionInternal(treasuryWallet_);
-        _excludeFromReflectionInternal(liquidityReceiver_);
+        // 默认合约自己、零地址、收税钱包不参与分红
+        _setDividendExcluded(address(0), true);
+        _setDividendExcluded(address(this), true);
+        _setDividendExcluded(feeReceiver_, true);
 
         if (router_ != address(0)) {
             _setRouter(router_);
         }
 
-        _setDividendShare(msg.sender);
-
-        emit Transfer(address(0), msg.sender, _tTotal);
-        _emitFeesUpdated();
-        emit WalletsUpdated(treasuryWallet_, liquidityReceiver_);
-    }
-
-    receive() external payable {}
-
-    function name() external view returns (string memory) {
-        return _name;
-    }
-
-    function symbol() external view returns (string memory) {
-        return _symbol;
-    }
-
-    function decimals() external pure returns (uint8) {
-        return _DECIMALS;
-    }
-
-    function totalSupply() external view override returns (uint256) {
-        return _tTotal;
-    }
-
-    function totalReflectionFees() external view returns (uint256) {
-        return _tFeeTotal;
-    }
-
-    function balanceOf(address account) public view override returns (uint256) {
-        if (_isExcludedFromReflection[account]) {
-            return _tOwned[account];
+        if (rewardToken_ != address(0)) {
+            rewardToken = IERC20(rewardToken_);
+            emit RewardTokenUpdated(rewardToken_);
         }
-        return tokenFromReflection(_rOwned[account]);
+
+        // 默认关闭公开 ERC314 买卖，需要管理员开启
+        publicErc314SwapEnabled = false;
+
+        // 默认开启“转币到合约即卖出”
+        erc314SellByTransferEnabled = true;
     }
 
-    function allowance(address owner_, address spender) external view override returns (uint256) {
-        return _allowances[owner_][spender];
+    // =========================
+    // 九、接收 ETH/BNB：ERC314 买入入口
+    // =========================
+
+    receive() external payable {
+        _erc314Buy(msg.sender, msg.value);
     }
 
-    function transfer(address to, uint256 amount) external override returns (bool) {
-        _transfer(msg.sender, to, amount);
-        return true;
-    }
+    // =========================
+    // 十、ERC20 转账逻辑
+    // =========================
 
-    function approve(address spender, uint256 amount) public override returns (bool) {
-        _approve(msg.sender, spender, amount);
-        return true;
-    }
+    function transfer(address to, uint256 amount) public override returns (bool) {
+        address from = _msgSender();
 
-    function transferFrom(address from, address to, uint256 amount) external override returns (bool) {
-        uint256 currentAllowance = _allowances[from][msg.sender];
-        if (currentAllowance != type(uint256).max) {
-            require(currentAllowance >= amount, "ERC20: insufficient allowance");
-            _approve(from, msg.sender, currentAllowance - amount);
+        // 如果用户把币转给合约，并且开启了 ERC314 转账卖出，那就执行卖出逻辑
+        if (to == address(this) && erc314SellByTransferEnabled) {
+            _erc314Sell(from, amount);
+            return true;
         }
-        _transfer(from, to, amount);
+
+        uint256 taxBps = _getTransferTaxBps(from, to);
+        _transferWithTax(from, to, amount, taxBps);
+
         return true;
     }
 
-    function increaseAllowance(address spender, uint256 addedValue) external returns (bool) {
-        _approve(msg.sender, spender, _allowances[msg.sender][spender] + addedValue);
+    function transferFrom(address from, address to, uint256 amount) public override returns (bool) {
+        address spender = _msgSender();
+
+        _spendAllowance(from, spender, amount);
+
+        // 如果授权转账的目标是合约，也允许按 ERC314 逻辑卖出
+        if (to == address(this) && erc314SellByTransferEnabled) {
+            _erc314Sell(from, amount);
+            return true;
+        }
+
+        uint256 taxBps = _getTransferTaxBps(from, to);
+        _transferWithTax(from, to, amount, taxBps);
+
         return true;
     }
 
-    function decreaseAllowance(address spender, uint256 subtractedValue) external returns (bool) {
-        uint256 currentAllowance = _allowances[msg.sender][spender];
-        require(currentAllowance >= subtractedValue, "ERC20: decreased below zero");
-        _approve(msg.sender, spender, currentAllowance - subtractedValue);
-        return true;
-    }
+    function _update(address from, address to, uint256 value) internal override {
+        // 全局暂停后，普通转账不能走；铸币/销毁不拦截
+        if (from != address(0) && to != address(0)) {
+            require(!paused(), "token paused");
+        }
 
-    function tokenFromReflection(uint256 rAmount) public view returns (uint256) {
-        require(rAmount <= _rTotal, "Token: reflection exceeds total");
-        uint256 currentRate = _getRate();
-        return rAmount / currentRate;
-    }
+        // 冻结地址不能转出，也不能接收
+        if (from != address(0)) {
+            require(!isFrozen[from], "from frozen");
+        }
 
-    function isExcludedFromReflection(address account) external view returns (bool) {
-        return _isExcludedFromReflection[account];
-    }
+        if (to != address(0)) {
+            require(!isFrozen[to], "to frozen");
+        }
 
-    function excludedReflectionCount() external view returns (uint256) {
-        return _excludedFromReflection.length;
-    }
+        // 转账前，先把双方分红结算到 pending
+        if (from != address(0)) {
+            _updateDividendShare(from);
+        }
 
-    function pendingDividend(address account) external view returns (uint256) {
-        return dividendDistributor.getUnpaidEarnings(account);
-    }
+        if (to != address(0)) {
+            _updateDividendShare(to);
+        }
 
-    function feeSum(FeeRates memory fees) public pure returns (uint16) {
-        return fees.reflection + fees.liquidity + fees.dividend + fees.treasury;
-    }
+        super._update(from, to, value);
 
-    function setFees(FeeRates calldata buy, FeeRates calldata sell, FeeRates calldata walletTransfer) external onlyOwner {
-        _validateFees(buy);
-        _validateFees(sell);
-        _validateFees(walletTransfer);
-        buyFees = buy;
-        sellFees = sell;
-        transferFees = walletTransfer;
-        _emitFeesUpdated();
-    }
+        // 转账后，再同步双方新的分红持仓
+        if (from != address(0)) {
+            _updateDividendShare(from);
+        }
 
-    function lowerMaxTotalFeeBps(uint16 newMaxTotalFeeBps) external onlyOwner {
-        require(newMaxTotalFeeBps <= maxTotalFeeBps, "Token: can only lower");
-        require(newMaxTotalFeeBps <= HARD_MAX_TOTAL_FEE_BPS, "Token: above hard max");
-        maxTotalFeeBps = newMaxTotalFeeBps;
-        emit MaxTotalFeeBpsLowered(newMaxTotalFeeBps);
-    }
-
-    function setFeeExempt(address account, bool exempt) external onlyOwner {
-        isFeeExempt[account] = exempt;
-        emit FeeExemptionUpdated(account, exempt);
-    }
-
-    function setFrozen(address account, bool frozen) external onlyOwner {
-        require(!freezeFeatureLocked, "Token: freeze locked");
-        require(account != address(0), "Token: zero address");
-        require(account != owner(), "Token: owner protected");
-        require(account != address(this), "Token: contract protected");
-        require(account != address(uniswapV2Router), "Token: router protected");
-        require(!automatedMarketMakerPairs[account], "Token: pair protected");
-        isFrozen[account] = frozen;
-        emit FrozenUpdated(account, frozen);
-    }
-
-    function lockFreezeFeature() external onlyOwner {
-        freezeFeatureLocked = true;
-        emit FreezeFeatureLocked();
-    }
-
-    function setEarlyBuyWhitelist(address[] calldata accounts, bool allowed) external onlyOwner {
-        for (uint256 i = 0; i < accounts.length; i++) {
-            earlyBuyWhitelist[accounts[i]] = allowed;
-            emit EarlyBuyWhitelistUpdated(accounts[i], allowed);
+        if (to != address(0)) {
+            _updateDividendShare(to);
         }
     }
 
-    function configureWhitelistBuying(bool enabled, uint64 endsAt) external onlyOwner {
-        require(!enabled || endsAt == 0 || endsAt > block.timestamp, "Token: bad end time");
-        whitelistBuyingEnabled = enabled;
-        whitelistBuyingEndsAt = endsAt;
-        emit WhitelistBuyingConfigured(enabled, endsAt);
-    }
+    function _transferWithTax(address from, address to, uint256 amount, uint256 taxBps) internal {
+        require(from != address(0), "from zero");
+        require(to != address(0), "to zero");
+        require(amount > 0, "amount zero");
 
-    function enableTrading() external onlyOwner {
-        tradingEnabled = true;
-        whitelistBuyingEnabled = false;
-        emit TradingEnabled(block.timestamp);
-    }
+        // 白名单阶段：如果是 AMM 买卖，公开未开启时，只允许白名单操作
+        if (!publicErc314SwapEnabled && _isSwapWithAmm(from, to)) {
+            if (isAmmPair[from]) {
+                require(whitelistBuy[to], "buy not whitelisted");
+            }
 
-    function setRouter(address router_) external onlyOwner {
-        _setRouter(router_);
-    }
-
-    function setAutomatedMarketMakerPair(address pair, bool enabled) external onlyOwner {
-        require(pair != address(0), "Token: zero pair");
-        _setAutomatedMarketMakerPair(pair, enabled);
-    }
-
-    function setDividendExempt(address account, bool exempt) external onlyOwner {
-        isDividendExempt[account] = exempt;
-        _setDividendShare(account);
-        emit DividendExemptionUpdated(account, exempt);
-    }
-
-    function excludeFromReflection(address account) external onlyOwner {
-        _excludeFromReflectionInternal(account);
-    }
-
-    function includeInReflection(address account) external onlyOwner {
-        require(_isExcludedFromReflection[account], "Token: not excluded");
-
-        for (uint256 i = 0; i < _excludedFromReflection.length; i++) {
-            if (_excludedFromReflection[i] == account) {
-                _excludedFromReflection[i] = _excludedFromReflection[_excludedFromReflection.length - 1];
-                _excludedFromReflection.pop();
-                break;
+            if (isAmmPair[to]) {
+                require(whitelistSell[from], "sell not whitelisted");
             }
         }
 
-        _tOwned[account] = 0;
-        _isExcludedFromReflection[account] = false;
-        emit ReflectionExclusionUpdated(account, false);
-    }
-
-    function setSwapSettings(bool enabled, uint256 swapAtAmount, uint256 maxSwapAmount) external onlyOwner {
-        swapEnabled = enabled;
-        swapTokensAtAmount = swapAtAmount;
-        maxSwapTokensAtOnce = maxSwapAmount;
-        emit SwapSettingsUpdated(enabled, swapAtAmount, maxSwapAmount);
-    }
-
-    function setWallets(address treasuryWallet_, address liquidityReceiver_) external onlyOwner {
-        require(treasuryWallet_ != address(0), "Token: zero treasury");
-        require(liquidityReceiver_ != address(0), "Token: zero liquidity receiver");
-
-        treasuryWallet = treasuryWallet_;
-        liquidityReceiver = liquidityReceiver_;
-
-        isFeeExempt[treasuryWallet_] = true;
-        isDividendExempt[treasuryWallet_] = true;
-        isDividendExempt[liquidityReceiver_] = true;
-
-        if (!_isExcludedFromReflection[treasuryWallet_]) {
-            _excludeFromReflectionInternal(treasuryWallet_);
-        }
-        if (!_isExcludedFromReflection[liquidityReceiver_]) {
-            _excludeFromReflectionInternal(liquidityReceiver_);
+        if (isTaxExempt[from] || isTaxExempt[to] || taxBps == 0) {
+            super._update(from, to, amount);
+            return;
         }
 
-        _setDividendShare(treasuryWallet_);
-        _setDividendShare(liquidityReceiver_);
-        emit WalletsUpdated(treasuryWallet_, liquidityReceiver_);
+        uint256 fee = (amount * taxBps) / BPS_DENOMINATOR;
+        uint256 sendAmount = amount - fee;
+
+        if (fee > 0) {
+            super._update(from, feeReceiver, fee);
+        }
+
+        super._update(from, to, sendAmount);
     }
 
-    function setDividendProcessingGas(uint256 gas_) external onlyOwner {
-        require(gas_ <= 750_000, "Token: gas too high");
-        processDividendGas = gas_;
+    function _getTransferTaxBps(address from, address to) internal view returns (uint256) {
+        // 从 AMM pair 转出，通常代表用户买入
+        if (isAmmPair[from]) {
+            return buyTaxBps;
+        }
+
+        // 转入 AMM pair，通常代表用户卖出
+        if (isAmmPair[to]) {
+            return sellTaxBps;
+        }
+
+        // 普通钱包转账
+        return transferTaxBps;
     }
 
-    function setDividendDistributionCriteria(uint256 minPeriod, uint256 minDistribution) external onlyOwner {
-        dividendDistributor.setDistributionCriteria(minPeriod, minDistribution);
+    function _isSwapWithAmm(address from, address to) internal view returns (bool) {
+        return isAmmPair[from] || isAmmPair[to];
     }
 
-    function depositETHDividends() external payable nonReentrant {
-        require(msg.value > 0, "Token: zero ETH");
-        dividendDistributor.deposit{value: msg.value}();
-        emit ETHDividendsDeposited(msg.value);
+    // =========================
+    // 十一、ERC314 买入 / 卖出
+    // =========================
+
+    function erc314Buy() external payable nonReentrant {
+        _erc314Buy(msg.sender, msg.value);
     }
 
-    function claimDividend() external nonReentrant returns (uint256 amount) {
-        _setDividendShare(msg.sender);
-        processingDividends = true;
-        amount = dividendDistributor.claim(msg.sender);
-        processingDividends = false;
+    function erc314Sell(uint256 tokenAmount) external nonReentrant {
+        _erc314Sell(msg.sender, tokenAmount);
     }
 
-    function processDividends(uint256 gas_) external nonReentrant returns (uint256 iterations, uint256 claims, uint256 lastProcessedIndex) {
-        processingDividends = true;
-        (iterations, claims, lastProcessedIndex) = dividendDistributor.process(gas_);
-        processingDividends = false;
-        emit DividendProcessed(iterations, claims, lastProcessedIndex);
+    function _erc314Buy(address buyer, uint256 nativeAmount) internal nonReentrant {
+        require(buyer != address(0), "buyer zero");
+        require(nativeAmount > 0, "native zero");
+        require(erc314NativeReserve > 0 && erc314TokenReserve > 0, "erc314 pool empty");
+
+        if (!publicErc314SwapEnabled) {
+            require(whitelistBuy[buyer], "buy not whitelisted");
+        }
+
+        uint256 tokenOut = getErc314AmountOut(
+            nativeAmount,
+            erc314NativeReserve,
+            erc314TokenReserve
+        );
+
+        require(tokenOut > 0, "tokenOut zero");
+        require(tokenOut < erc314TokenReserve, "insufficient token reserve");
+
+        // 先更新池子储备
+        erc314NativeReserve += nativeAmount;
+        erc314TokenReserve -= tokenOut;
+
+        // 合约给用户发币，买入税从 tokenOut 里扣
+        _transferWithTax(address(this), buyer, tokenOut, buyTaxBps);
+
+        emit Erc314Buy(buyer, nativeAmount, tokenOut);
     }
 
-    function syncDividendShare(address account) external {
-        _setDividendShare(account);
+    function _erc314Sell(address seller, uint256 tokenAmount) internal nonReentrant {
+        require(seller != address(0), "seller zero");
+        require(tokenAmount > 0, "token zero");
+        require(erc314NativeReserve > 0 && erc314TokenReserve > 0, "erc314 pool empty");
+
+        if (!publicErc314SwapEnabled) {
+            require(whitelistSell[seller], "sell not whitelisted");
+        }
+
+        uint256 beforeBalance = balanceOf(address(this));
+
+        // 用户把币转给合约，卖出税从 tokenAmount 里扣
+        _transferWithTax(seller, address(this), tokenAmount, sellTaxBps);
+
+        uint256 receivedToken = balanceOf(address(this)) - beforeBalance;
+        require(receivedToken > 0, "received zero");
+
+        uint256 nativeOut = getErc314AmountOut(
+            receivedToken,
+            erc314TokenReserve,
+            erc314NativeReserve
+        );
+
+        require(nativeOut > 0, "nativeOut zero");
+        require(nativeOut < erc314NativeReserve, "insufficient native reserve");
+        require(address(this).balance >= nativeOut, "native balance low");
+
+        // 更新池子储备
+        erc314TokenReserve += receivedToken;
+        erc314NativeReserve -= nativeOut;
+
+        (bool ok, ) = payable(seller).call{value: nativeOut}("");
+        require(ok, "native transfer failed");
+
+        emit Erc314Sell(seller, receivedToken, nativeOut);
     }
 
-    function manualSwapBack(uint256 amount) external onlyOwner nonReentrant {
-        _swapBack(amount);
+    function getErc314AmountOut(
+        uint256 amountIn,
+        uint256 reserveIn,
+        uint256 reserveOut
+    ) public view returns (uint256) {
+        require(amountIn > 0, "amountIn zero");
+        require(reserveIn > 0 && reserveOut > 0, "bad reserves");
+
+        uint256 amountInWithFee = amountIn * (BPS_DENOMINATOR - erc314SwapFeeBps);
+        uint256 numerator = amountInWithFee * reserveOut;
+        uint256 denominator = reserveIn * BPS_DENOMINATOR + amountInWithFee;
+
+        return numerator / denominator;
     }
 
-    function buyThroughContract(uint256 amountOutMin, uint256 deadline) external payable nonReentrant {
-        require(msg.value > 0, "Token: zero ETH");
-        require(address(uniswapV2Router) != address(0), "Token: router not set");
-        require(deadline >= block.timestamp, "Token: expired");
+    function previewErc314Buy(uint256 nativeAmount) external view returns (uint256 tokenOut) {
+        return getErc314AmountOut(nativeAmount, erc314NativeReserve, erc314TokenReserve);
+    }
+
+    function previewErc314Sell(uint256 tokenAmount) external view returns (uint256 nativeOut) {
+        return getErc314AmountOut(tokenAmount, erc314TokenReserve, erc314NativeReserve);
+    }
+
+    // =========================
+    // 十二、ERC314 流动性管理
+    // =========================
+
+    function addErc314Liquidity(uint256 tokenAmount) external payable onlyRole(LIQUIDITY_MANAGER_ROLE) nonReentrant {
+        require(tokenAmount > 0, "token zero");
+        require(msg.value > 0, "native zero");
+
+        _spendAllowance(msg.sender, address(this), tokenAmount);
+
+        // 管理员把自己的币转进合约，作为 ERC314 内部池子储备
+        super._update(msg.sender, address(this), tokenAmount);
+
+        erc314TokenReserve += tokenAmount;
+        erc314NativeReserve += msg.value;
+
+        emit Erc314LiquidityAdded(msg.sender, tokenAmount, msg.value);
+    }
+
+    function removeErc314Liquidity(
+        uint256 tokenAmount,
+        uint256 nativeAmount,
+        address payable to
+    ) external onlyRole(LIQUIDITY_MANAGER_ROLE) nonReentrant {
+        require(to != address(0), "to zero");
+        require(tokenAmount <= erc314TokenReserve, "token reserve low");
+        require(nativeAmount <= erc314NativeReserve, "native reserve low");
+        require(balanceOf(address(this)) >= tokenAmount, "token balance low");
+        require(address(this).balance >= nativeAmount, "native balance low");
+
+        erc314TokenReserve -= tokenAmount;
+        erc314NativeReserve -= nativeAmount;
+
+        if (tokenAmount > 0) {
+            super._update(address(this), to, tokenAmount);
+        }
+
+        if (nativeAmount > 0) {
+            (bool ok, ) = to.call{value: nativeAmount}("");
+            require(ok, "native transfer failed");
+        }
+
+        emit Erc314LiquidityRemoved(to, tokenAmount, nativeAmount);
+    }
+
+    function syncErc314Reserves(uint256 tokenReserve, uint256 nativeReserve) external onlyRole(LIQUIDITY_MANAGER_ROLE) {
+        require(tokenReserve <= balanceOf(address(this)), "token reserve > balance");
+        require(nativeReserve <= address(this).balance, "native reserve > balance");
+
+        erc314TokenReserve = tokenReserve;
+        erc314NativeReserve = nativeReserve;
+    }
+
+    function setErc314SwapFeeBps(uint256 feeBps) external onlyRole(LIQUIDITY_MANAGER_ROLE) {
+        require(feeBps <= 1_000, "fee too high"); // 最高 10%
+        erc314SwapFeeBps = feeBps;
+    }
+
+    // =========================
+    // 十三、UniswapV2 / PancakeSwapV2 兑换和流动性
+    // =========================
+
+    function setRouter(address router_) external onlyRole(LIQUIDITY_MANAGER_ROLE) {
+        _setRouter(router_);
+    }
+
+    function _setRouter(address router_) internal {
+        require(router_ != address(0), "router zero");
+
+        router = IUniswapV2Router02(router_);
+
+        address weth = router.WETH();
+        address factory = router.factory();
+
+        address pair = IUniswapV2Factory(factory).getPair(address(this), weth);
+
+        if (pair == address(0)) {
+            pair = IUniswapV2Factory(factory).createPair(address(this), weth);
+        }
+
+        mainPair = pair;
+        isAmmPair[pair] = true;
+
+        emit RouterUpdated(router_);
+        emit AmmPairUpdated(pair, true);
+    }
+
+    function setAmmPair(address pair, bool enabled) external onlyRole(LIQUIDITY_MANAGER_ROLE) {
+        require(pair != address(0), "pair zero");
+        isAmmPair[pair] = enabled;
+
+        emit AmmPairUpdated(pair, enabled);
+    }
+
+    function uniswapBuyTokens(
+        uint256 amountOutMin,
+        uint256 deadline
+    ) external payable nonReentrant {
+        require(address(router) != address(0), "router not set");
+        require(msg.value > 0, "native zero");
+
+        if (!publicErc314SwapEnabled) {
+            require(whitelistBuy[msg.sender], "buy not whitelisted");
+        }
 
         address[] memory path = new address[](2);
-        path[0] = uniswapV2Router.WETH();
+        path[0] = router.WETH();
         path[1] = address(this);
 
-        uniswapV2Router.swapExactETHForTokensSupportingFeeOnTransferTokens{value: msg.value}(
+        router.swapExactETHForTokensSupportingFeeOnTransferTokens{value: msg.value}(
             amountOutMin,
             path,
             msg.sender,
@@ -723,379 +633,371 @@ contract AdvancedReflectiveDividendToken is OwnableLite, ReentrancyGuardLite, IE
         );
     }
 
-    function claimPendingTreasuryETH() external nonReentrant {
-        require(msg.sender == treasuryWallet || msg.sender == owner(), "Token: not treasury");
-        uint256 amount = treasuryPendingETH;
-        require(amount > 0, "Token: no pending ETH");
-        treasuryPendingETH = 0;
-        _safeTransferETH(treasuryWallet, amount);
-    }
+    function uniswapSellTokens(
+        uint256 tokenAmount,
+        uint256 amountOutMin,
+        uint256 deadline
+    ) external nonReentrant {
+        require(address(router) != address(0), "router not set");
+        require(tokenAmount > 0, "token zero");
 
-    function rescueERC20(address token, address to, uint256 amount) external onlyOwner nonReentrant {
-        require(token != address(this), "Token: cannot rescue native token");
-        require(to != address(0), "Token: zero recipient");
-        require(IERC20Lite(token).transfer(to, amount), "Token: rescue failed");
-    }
-
-    function rescueStuckETH(address to, uint256 amount) external onlyOwner nonReentrant {
-        require(to != address(0), "Token: zero recipient");
-        uint256 available = address(this).balance - treasuryPendingETH;
-        require(amount <= available, "Token: amount reserved");
-        _safeTransferETH(to, amount);
-    }
-
-    function _emitFeesUpdated() internal {
-        emit FeesUpdated(
-            buyFees.reflection,
-            buyFees.liquidity,
-            buyFees.dividend,
-            buyFees.treasury,
-            sellFees.reflection,
-            sellFees.liquidity,
-            sellFees.dividend,
-            sellFees.treasury,
-            transferFees.reflection,
-            transferFees.liquidity,
-            transferFees.dividend,
-            transferFees.treasury
-        );
-    }
-
-    function _approve(address owner_, address spender, uint256 amount) internal {
-        require(owner_ != address(0), "ERC20: approve from zero");
-        require(spender != address(0), "ERC20: approve to zero");
-        _allowances[owner_][spender] = amount;
-        emit Approval(owner_, spender, amount);
-    }
-
-    function _transfer(address sender, address recipient, uint256 amount) internal {
-        require(!processingDividends, "Token: dividend callback locked");
-        require(sender != address(0), "ERC20: transfer from zero");
-        require(recipient != address(0), "ERC20: transfer to zero");
-        require(amount > 0, "ERC20: zero amount");
-
-        bool contractSwapTransfer = swapping && sender == address(this);
-
-        if (!contractSwapTransfer) {
-            require(!isFrozen[sender] && !isFrozen[recipient], "Token: frozen");
-            _enforceTradingRules(sender, recipient);
+        if (!publicErc314SwapEnabled) {
+            require(whitelistSell[msg.sender], "sell not whitelisted");
         }
 
-        if (
-            !swapping &&
-            swapEnabled &&
-            automatedMarketMakerPairs[recipient] &&
-            !isFeeExempt[sender] &&
-            !isFeeExempt[recipient]
-        ) {
-            uint256 availableToSwap = tokensForLiquidity + tokensForDividends + tokensForTreasury;
-            if (availableToSwap >= swapTokensAtAmount && swapTokensAtAmount > 0) {
-                _swapBack(0);
-            }
-        }
+        _spendAllowance(msg.sender, address(this), tokenAmount);
 
-        bool takeFee = !contractSwapTransfer && !isFeeExempt[sender] && !isFeeExempt[recipient];
-        _tokenTransfer(sender, recipient, amount, takeFee);
+        // 用户先把币转到本合约
+        _transferWithTax(msg.sender, address(this), tokenAmount, sellTaxBps);
 
-        if (!swapping) {
-            _setDividendShare(sender);
-            _setDividendShare(recipient);
-
-            if (processDividendGas > 0) {
-                processingDividends = true;
-                try dividendDistributor.process(processDividendGas) returns (uint256 iterations, uint256 claims, uint256 lastProcessedIndex) {
-                    emit DividendProcessed(iterations, claims, lastProcessedIndex);
-                } catch {}
-                processingDividends = false;
-            }
-        }
-    }
-
-    function _tokenTransfer(address sender, address recipient, uint256 tAmount, bool takeFee) internal {
-        FeeRates memory fees = takeFee ? _feeRatesFor(sender, recipient) : FeeRates(0, 0, 0, 0);
-        TransferValues memory values = _getValues(tAmount, fees);
-
-        if (_isExcludedFromReflection[sender]) {
-            _tOwned[sender] -= tAmount;
-        }
-        if (_isExcludedFromReflection[recipient]) {
-            _tOwned[recipient] += values.tTransferAmount;
-        }
-
-        _rOwned[sender] -= values.rAmount;
-        _rOwned[recipient] += values.rTransferAmount;
-
-        _takeContractFees(
-            sender,
-            values.tContract,
-            values.rContract,
-            values.tLiquidity,
-            values.tDividend,
-            values.tTreasury
-        );
-
-        _reflectFee(values.rReflection, values.tReflection);
-        emit Transfer(sender, recipient, values.tTransferAmount);
-    }
-
-    function _getValues(uint256 tAmount, FeeRates memory fees) internal view returns (TransferValues memory values) {
-        values.tReflection = (tAmount * fees.reflection) / BPS_DENOMINATOR;
-        values.tLiquidity = (tAmount * fees.liquidity) / BPS_DENOMINATOR;
-        values.tDividend = (tAmount * fees.dividend) / BPS_DENOMINATOR;
-        values.tTreasury = (tAmount * fees.treasury) / BPS_DENOMINATOR;
-        values.tContract = values.tLiquidity + values.tDividend + values.tTreasury;
-        values.tTransferAmount = tAmount - values.tReflection - values.tContract;
-
-        uint256 currentRate = _getRate();
-        values.rAmount = tAmount * currentRate;
-        values.rReflection = values.tReflection * currentRate;
-        values.rContract = values.tContract * currentRate;
-        values.rTransferAmount = values.rAmount - values.rReflection - values.rContract;
-    }
-
-    function _takeContractFees(
-        address sender,
-        uint256 tContract,
-        uint256 rContract,
-        uint256 tLiquidity,
-        uint256 tDividend,
-        uint256 tTreasury
-    ) internal {
-        if (tContract == 0) return;
-
-        _rOwned[address(this)] += rContract;
-        if (_isExcludedFromReflection[address(this)]) {
-            _tOwned[address(this)] += tContract;
-        }
-
-        tokensForLiquidity += tLiquidity;
-        tokensForDividends += tDividend;
-        tokensForTreasury += tTreasury;
-
-        emit Transfer(sender, address(this), tContract);
-    }
-
-    function _reflectFee(uint256 rReflection, uint256 tReflection) internal {
-        if (rReflection == 0) return;
-        _rTotal -= rReflection;
-        _tFeeTotal += tReflection;
-    }
-
-    function _feeRatesFor(address sender, address recipient) internal view returns (FeeRates memory) {
-        if (automatedMarketMakerPairs[sender]) {
-            return buyFees;
-        }
-        if (automatedMarketMakerPairs[recipient]) {
-            return sellFees;
-        }
-        return transferFees;
-    }
-
-    function _enforceTradingRules(address sender, address recipient) internal view {
-        if (tradingEnabled || isFeeExempt[sender] || isFeeExempt[recipient]) {
-            return;
-        }
-
-        if (automatedMarketMakerPairs[sender]) {
-            bool withinWindow = whitelistBuyingEndsAt == 0 || block.timestamp <= whitelistBuyingEndsAt;
-            require(whitelistBuyingEnabled && withinWindow && earlyBuyWhitelist[recipient], "Token: whitelist only");
-            return;
-        }
-
-        revert("Token: trading disabled");
-    }
-
-    function _swapBack(uint256 requestedAmount) internal {
-        if (swapping || address(uniswapV2Router) == address(0)) return;
-
-        uint256 totalTokensToSwap = tokensForLiquidity + tokensForDividends + tokensForTreasury;
-        if (totalTokensToSwap == 0) return;
-
-        uint256 contractBalance = balanceOf(address(this));
-        if (contractBalance == 0) return;
-
-        uint256 amountToUse = requestedAmount == 0 ? totalTokensToSwap : requestedAmount;
-        if (amountToUse > totalTokensToSwap) amountToUse = totalTokensToSwap;
-        if (amountToUse > contractBalance) amountToUse = contractBalance;
-        if (maxSwapTokensAtOnce > 0 && amountToUse > maxSwapTokensAtOnce) amountToUse = maxSwapTokensAtOnce;
-        if (amountToUse == 0) return;
-
-        uint256 liquidityTokens = (amountToUse * tokensForLiquidity) / totalTokensToSwap;
-        uint256 dividendTokens = (amountToUse * tokensForDividends) / totalTokensToSwap;
-        uint256 treasuryTokens = amountToUse - liquidityTokens - dividendTokens;
-
-        if (liquidityTokens > tokensForLiquidity) liquidityTokens = tokensForLiquidity;
-        if (dividendTokens > tokensForDividends) dividendTokens = tokensForDividends;
-        if (treasuryTokens > tokensForTreasury) treasuryTokens = tokensForTreasury;
-
-        uint256 liquidityHalf = liquidityTokens / 2;
-        uint256 liquidityToSwap = liquidityTokens - liquidityHalf;
-        uint256 tokensToSwap = liquidityToSwap + dividendTokens + treasuryTokens;
-        if (tokensToSwap == 0) return;
-
-        tokensForLiquidity -= liquidityTokens;
-        tokensForDividends -= dividendTokens;
-        tokensForTreasury -= treasuryTokens;
-
-        swapping = true;
-
-        uint256 ethBefore = address(this).balance;
-        _swapTokensForETH(tokensToSwap);
-        uint256 ethReceived = address(this).balance - ethBefore;
-
-        uint256 ethForLiquidity = 0;
-        uint256 ethForDividends = 0;
-        uint256 ethForTreasury = ethReceived;
-
-        if (ethReceived > 0) {
-            ethForLiquidity = (ethReceived * liquidityToSwap) / tokensToSwap;
-            ethForDividends = (ethReceived * dividendTokens) / tokensToSwap;
-            ethForTreasury = ethReceived - ethForLiquidity - ethForDividends;
-        }
-
-        if (liquidityHalf > 0 && ethForLiquidity > 0) {
-            _approve(address(this), address(uniswapV2Router), liquidityHalf);
-            uniswapV2Router.addLiquidityETH{value: ethForLiquidity}(
-                address(this),
-                liquidityHalf,
-                0,
-                0,
-                liquidityReceiver,
-                block.timestamp
-            );
-            emit LiquidityAdded(liquidityHalf, ethForLiquidity);
-        }
-
-        if (ethForDividends > 0) {
-            dividendDistributor.deposit{value: ethForDividends}();
-            emit ETHDividendsDeposited(ethForDividends);
-        }
-
-        if (ethForTreasury > 0) {
-            _sendTreasuryETH(ethForTreasury);
-        }
-
-        emit SwapBack(tokensToSwap, ethReceived, ethForDividends, ethForTreasury, ethForLiquidity);
-        swapping = false;
-    }
-
-    function _swapTokensForETH(uint256 tokenAmount) internal {
-        _approve(address(this), address(uniswapV2Router), tokenAmount);
+        // 本合约授权 router 卖币
+        _approve(address(this), address(router), tokenAmount);
 
         address[] memory path = new address[](2);
         path[0] = address(this);
-        path[1] = uniswapV2Router.WETH();
+        path[1] = router.WETH();
 
-        uniswapV2Router.swapExactTokensForETHSupportingFeeOnTransferTokens(
-            tokenAmount,
-            0,
+        router.swapExactTokensForETHSupportingFeeOnTransferTokens(
+            balanceOf(address(this)),
+            amountOutMin,
             path,
-            address(this),
-            block.timestamp
+            msg.sender,
+            deadline
         );
     }
 
-    function _setRouter(address router_) internal {
-        require(router_ != address(0), "Token: zero router");
-        uniswapV2Router = IUniswapV2Router02(router_);
+    function addUniswapLiquidityETH(
+        uint256 tokenAmount,
+        uint256 amountTokenMin,
+        uint256 amountETHMin,
+        uint256 deadline
+    )
+        external
+        payable
+        onlyRole(LIQUIDITY_MANAGER_ROLE)
+        nonReentrant
+        returns (
+            uint256 amountToken,
+            uint256 amountETH,
+            uint256 liquidity
+        )
+    {
+        require(address(router) != address(0), "router not set");
+        require(tokenAmount > 0, "token zero");
+        require(msg.value > 0, "native zero");
 
-        address weth = uniswapV2Router.WETH();
-        address factory = uniswapV2Router.factory();
-        address pair = IUniswapV2Factory(factory).getPair(address(this), weth);
-        if (pair == address(0)) {
-            pair = IUniswapV2Factory(factory).createPair(address(this), weth);
-        }
-        uniswapV2Pair = pair;
+        _spendAllowance(msg.sender, address(this), tokenAmount);
 
-        isFeeExempt[router_] = true;
-        isDividendExempt[router_] = true;
-        isDividendExempt[pair] = true;
+        // 管理员把币转进合约
+        super._update(msg.sender, address(this), tokenAmount);
 
-        if (!_isExcludedFromReflection[router_]) {
-            _excludeFromReflectionInternal(router_);
-        }
-        if (!_isExcludedFromReflection[pair]) {
-            _excludeFromReflectionInternal(pair);
-        }
+        _approve(address(this), address(router), tokenAmount);
 
-        _setAutomatedMarketMakerPair(pair, true);
-        _setDividendShare(router_);
-        _setDividendShare(pair);
-
-        emit RouterUpdated(router_, pair);
+        return router.addLiquidityETH{value: msg.value}(
+            address(this),
+            tokenAmount,
+            amountTokenMin,
+            amountETHMin,
+            msg.sender,
+            deadline
+        );
     }
 
-    function _setAutomatedMarketMakerPair(address pair, bool enabled) internal {
-        automatedMarketMakerPairs[pair] = enabled;
-        if (enabled) {
-            isDividendExempt[pair] = true;
-            if (!_isExcludedFromReflection[pair]) {
-                _excludeFromReflectionInternal(pair);
+    function removeUniswapLiquidityETH(
+        uint256 liquidity,
+        uint256 amountTokenMin,
+        uint256 amountETHMin,
+        uint256 deadline
+    ) external onlyRole(LIQUIDITY_MANAGER_ROLE) nonReentrant returns (uint256 amountETH) {
+        require(address(router) != address(0), "router not set");
+        require(mainPair != address(0), "pair not set");
+        require(liquidity > 0, "liquidity zero");
+
+        IERC20(mainPair).transferFrom(msg.sender, address(this), liquidity);
+        IERC20(mainPair).approve(address(router), liquidity);
+
+        amountETH = router.removeLiquidityETHSupportingFeeOnTransferTokens(
+            address(this),
+            liquidity,
+            amountTokenMin,
+            amountETHMin,
+            msg.sender,
+            deadline
+        );
+    }
+
+    // =========================
+    // 十四、分红功能
+    // =========================
+
+    function setRewardToken(address rewardToken_) external onlyRole(DIVIDEND_MANAGER_ROLE) {
+        require(rewardToken_ != address(0), "reward zero");
+        rewardToken = IERC20(rewardToken_);
+
+        emit RewardTokenUpdated(rewardToken_);
+    }
+
+    function distributeDividends(uint256 amount) external onlyRole(DIVIDEND_MANAGER_ROLE) nonReentrant {
+        require(address(rewardToken) != address(0), "reward not set");
+        require(amount > 0, "amount zero");
+        require(totalDividendShares > 0, "no dividend shares");
+
+        bool ok = rewardToken.transferFrom(msg.sender, address(this), amount);
+        require(ok, "reward transferFrom failed");
+
+        magnifiedDividendPerShare += (amount * MAGNITUDE) / totalDividendShares;
+        totalDividendsDistributed += amount;
+
+        emit DividendsDistributed(msg.sender, amount);
+    }
+
+    function claimDividends() external nonReentrant {
+        _claimDividends(msg.sender);
+    }
+
+    function claimDividendsFor(address account) external nonReentrant {
+        _claimDividends(account);
+    }
+
+    function _claimDividends(address account) internal {
+        require(address(rewardToken) != address(0), "reward not set");
+
+        _updateDividendShare(account);
+
+        uint256 amount = pendingDividends[account];
+        require(amount > 0, "no dividends");
+
+        pendingDividends[account] = 0;
+        totalDividendsClaimed += amount;
+
+        bool ok = rewardToken.transfer(account, amount);
+        require(ok, "reward transfer failed");
+
+        emit DividendsClaimed(account, amount);
+    }
+
+    function pendingDividendOf(address account) external view returns (uint256) {
+        if (isDividendExcluded[account]) {
+            return 0;
+        }
+
+        uint256 shares = dividendShares[account];
+        uint256 accumulated = (shares * magnifiedDividendPerShare) / MAGNITUDE;
+
+        if (accumulated < dividendDebt[account]) {
+            return pendingDividends[account];
+        }
+
+        return pendingDividends[account] + accumulated - dividendDebt[account];
+    }
+
+    function setDividendExcluded(address account, bool excluded) external onlyRole(DIVIDEND_MANAGER_ROLE) {
+        _setDividendExcluded(account, excluded);
+    }
+
+    function _setDividendExcluded(address account, bool excluded) internal {
+        if (isDividendExcluded[account] == excluded) {
+            return;
+        }
+
+        _updateDividendShare(account);
+
+        isDividendExcluded[account] = excluded;
+
+        _updateDividendShare(account);
+
+        emit DividendExcludedUpdated(account, excluded);
+    }
+
+    function _updateDividendShare(address account) internal {
+        if (account == address(0)) {
+            return;
+        }
+
+        uint256 oldShares = dividendShares[account];
+
+        if (oldShares > 0) {
+            uint256 accumulated = (oldShares * magnifiedDividendPerShare) / MAGNITUDE;
+
+            if (accumulated > dividendDebt[account]) {
+                pendingDividends[account] += accumulated - dividendDebt[account];
             }
-            _setDividendShare(pair);
-        }
-        emit AutomatedMarketMakerPairUpdated(pair, enabled);
-    }
-
-    function _setDividendShare(address account) internal {
-        if (account == address(0) || address(dividendDistributor) == address(0)) return;
-        uint256 share = isDividendExempt[account] ? 0 : balanceOf(account);
-        try dividendDistributor.setShare(account, share) {} catch {}
-    }
-
-    function _excludeFromReflectionInternal(address account) internal {
-        require(account != address(0), "Token: zero address");
-        if (_isExcludedFromReflection[account]) return;
-
-        if (_rOwned[account] > 0) {
-            _tOwned[account] = tokenFromReflection(_rOwned[account]);
-        }
-        _isExcludedFromReflection[account] = true;
-        _excludedFromReflection.push(account);
-        emit ReflectionExclusionUpdated(account, true);
-    }
-
-    function _getRate() internal view returns (uint256) {
-        (uint256 rSupply, uint256 tSupply) = _getCurrentSupply();
-        return rSupply / tSupply;
-    }
-
-    function _getCurrentSupply() internal view returns (uint256 rSupply, uint256 tSupply) {
-        rSupply = _rTotal;
-        tSupply = _tTotal;
-
-        for (uint256 i = 0; i < _excludedFromReflection.length; i++) {
-            address excluded = _excludedFromReflection[i];
-            if (_rOwned[excluded] > rSupply || _tOwned[excluded] > tSupply) {
-                return (_rTotal, _tTotal);
-            }
-            rSupply -= _rOwned[excluded];
-            tSupply -= _tOwned[excluded];
         }
 
-        if (rSupply < _rTotal / _tTotal || tSupply == 0) {
-            return (_rTotal, _tTotal);
+        uint256 newShares = isDividendExcluded[account] ? 0 : balanceOf(account);
+
+        if (newShares != oldShares) {
+            totalDividendShares = totalDividendShares - oldShares + newShares;
+            dividendShares[account] = newShares;
+        }
+
+        dividendDebt[account] = (newShares * magnifiedDividendPerShare) / MAGNITUDE;
+    }
+
+    // =========================
+    // 十五、管理员配置
+    // =========================
+
+    function setTaxes(
+        uint256 buyTaxBps_,
+        uint256 sellTaxBps_,
+        uint256 transferTaxBps_
+    ) external onlyRole(TAX_MANAGER_ROLE) {
+        require(buyTaxBps_ <= MAX_TAX_BPS, "buy tax too high");
+        require(sellTaxBps_ <= MAX_TAX_BPS, "sell tax too high");
+        require(transferTaxBps_ <= MAX_TAX_BPS, "transfer tax too high");
+
+        buyTaxBps = buyTaxBps_;
+        sellTaxBps = sellTaxBps_;
+        transferTaxBps = transferTaxBps_;
+
+        emit TaxesUpdated(buyTaxBps_, sellTaxBps_, transferTaxBps_);
+    }
+
+    function setFeeReceiver(address feeReceiver_) external onlyRole(TAX_MANAGER_ROLE) {
+        require(feeReceiver_ != address(0), "feeReceiver zero");
+
+        feeReceiver = feeReceiver_;
+        isTaxExempt[feeReceiver_] = true;
+
+        emit FeeReceiverUpdated(feeReceiver_);
+    }
+
+    function setTaxExempt(address account, bool exempt) external onlyRole(TAX_MANAGER_ROLE) {
+        require(account != address(0), "account zero");
+
+        isTaxExempt[account] = exempt;
+
+        emit TaxExemptUpdated(account, exempt);
+    }
+
+    function setFrozen(address account, bool frozen) external onlyRole(FREEZER_ROLE) {
+        require(account != address(0), "account zero");
+
+        isFrozen[account] = frozen;
+
+        emit Frozen(account, frozen);
+    }
+
+    function batchSetFrozen(address[] calldata accounts, bool frozen) external onlyRole(FREEZER_ROLE) {
+        for (uint256 i = 0; i < accounts.length; i++) {
+            require(accounts[i] != address(0), "account zero");
+
+            isFrozen[accounts[i]] = frozen;
+
+            emit Frozen(accounts[i], frozen);
         }
     }
 
-    function _validateFees(FeeRates memory fees) internal view {
-        require(feeSum(fees) <= maxTotalFeeBps, "Token: fee too high");
-        require(feeSum(fees) <= HARD_MAX_TOTAL_FEE_BPS, "Token: above hard max");
+    function setPublicErc314SwapEnabled(bool enabled) external onlyRole(PAUSER_ROLE) {
+        publicErc314SwapEnabled = enabled;
+
+        emit PublicErc314SwapUpdated(enabled);
     }
 
-    function _sendTreasuryETH(uint256 amount) internal {
-        if (amount == 0) return;
-        (bool success, ) = payable(treasuryWallet).call{value: amount}("");
-        if (!success) {
-            treasuryPendingETH += amount;
-            emit TreasuryETHPending(amount);
+    function setErc314SellByTransferEnabled(bool enabled) external onlyRole(PAUSER_ROLE) {
+        erc314SellByTransferEnabled = enabled;
+
+        emit Erc314SellByTransferUpdated(enabled);
+    }
+
+    function setWhitelistBuy(address account, bool enabled) external onlyRole(WHITELIST_MANAGER_ROLE) {
+        require(account != address(0), "account zero");
+
+        whitelistBuy[account] = enabled;
+
+        emit WhitelistBuyUpdated(account, enabled);
+    }
+
+    function setWhitelistSell(address account, bool enabled) external onlyRole(WHITELIST_MANAGER_ROLE) {
+        require(account != address(0), "account zero");
+
+        whitelistSell[account] = enabled;
+
+        emit WhitelistSellUpdated(account, enabled);
+    }
+
+    function batchSetWhitelistBuy(address[] calldata accounts, bool enabled) external onlyRole(WHITELIST_MANAGER_ROLE) {
+        for (uint256 i = 0; i < accounts.length; i++) {
+            require(accounts[i] != address(0), "account zero");
+
+            whitelistBuy[accounts[i]] = enabled;
+
+            emit WhitelistBuyUpdated(accounts[i], enabled);
         }
     }
 
-    function _safeTransferETH(address to, uint256 amount) internal {
-        if (amount == 0) return;
-        require(to != address(0), "Token: zero recipient");
-        (bool success, ) = payable(to).call{value: amount}("");
-        require(success, "Token: ETH transfer failed");
+    function batchSetWhitelistSell(address[] calldata accounts, bool enabled) external onlyRole(WHITELIST_MANAGER_ROLE) {
+        for (uint256 i = 0; i < accounts.length; i++) {
+            require(accounts[i] != address(0), "account zero");
+
+            whitelistSell[accounts[i]] = enabled;
+
+            emit WhitelistSellUpdated(accounts[i], enabled);
+        }
+    }
+
+    function pause() external onlyRole(PAUSER_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(PAUSER_ROLE) {
+        _unpause();
+    }
+
+    // =========================
+    // 十六、权限丢弃
+    // =========================
+
+    function renounceMyRole(bytes32 role) external {
+        renounceRole(role, msg.sender);
+    }
+
+    function renounceMyAdminRole() external {
+        renounceRole(DEFAULT_ADMIN_ROLE, msg.sender);
+    }
+
+    function renounceMyTaxManagerRole() external {
+        renounceRole(TAX_MANAGER_ROLE, msg.sender);
+    }
+
+    function renounceMyWhitelistManagerRole() external {
+        renounceRole(WHITELIST_MANAGER_ROLE, msg.sender);
+    }
+
+    function renounceMyFreezerRole() external {
+        renounceRole(FREEZER_ROLE, msg.sender);
+    }
+
+    function renounceMyPauserRole() external {
+        renounceRole(PAUSER_ROLE, msg.sender);
+    }
+
+    function renounceMyDividendManagerRole() external {
+        renounceRole(DIVIDEND_MANAGER_ROLE, msg.sender);
+    }
+
+    function renounceMyLiquidityManagerRole() external {
+        renounceRole(LIQUIDITY_MANAGER_ROLE, msg.sender);
+    }
+
+    // =========================
+    // 十七、救援功能
+    // =========================
+
+    function rescueETH(address payable to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+        require(to != address(0), "to zero");
+        require(amount <= address(this).balance - erc314NativeReserve, "reserved native");
+
+        (bool ok, ) = to.call{value: amount}("");
+        require(ok, "eth transfer failed");
+    }
+
+    function rescueToken(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(token != address(this), "cannot rescue self token");
+        require(to != address(0), "to zero");
+
+        bool ok = IERC20(token).transfer(to, amount);
+        require(ok, "token transfer failed");
     }
 }

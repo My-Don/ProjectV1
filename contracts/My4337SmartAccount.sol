@@ -2,43 +2,47 @@
 pragma solidity ^0.8.24;
 
 /*
-    这份合约是一套“基础版、可上线前审计”的 ERC-4337 智能账户模板。
+    最终上线模板：ERC-4337 单 owner 智能账户 + CREATE2 工厂。
 
-    它包含两部分：
+    设计目标：
+    - 单 owner ECDSA 签名控制账户。
+    - 支持 ERC-4337 validateUserOp。
+    - 支持 execute 单笔调用。
+    - 支持 executeBatch 批量调用。
+    - 支持 ERC-1271 标准签名校验。
+    - 支持自定义 EIP-712 domain-bound 严格签名校验。
+    - 支持收 ETH。
+    - 支持收 ERC721 / ERC1155。
+    - 支持 EntryPoint 押金充值和提现。
+    - 支持 CREATE2 反事实地址。
+    - 支持账户未部署时生成 initCode。
+    - 支持账户已部署时返回空 initCode，方便生产前端省 gas。
+    - 提供 version()，方便前端、SDK、监控和测试脚本识别版本。
 
-    1. My4337SmartAccount
-       真正的钱包账户。
-       每个用户会有一个自己的账户地址。
-       这个账户可以：
-       - 校验 owner 的 ECDSA 签名
-       - 通过 EntryPoint 执行交易
-       - 单笔调用 execute
-       - 批量调用 executeBatch
-       - 收 ETH
-       - 收 ERC721 NFT
-       - 收 ERC1155 NFT
-       - 支持 ERC-1271，方便 DApp 判断“这个智能账户签名是否有效”
-       - 给 EntryPoint 充值押金
-       - 从 EntryPoint 提回押金
-
-    2. My4337SmartAccountFactory
-       账户工厂。
-       用 CREATE2/Clones 做确定性部署，也就是：
-       - 用户账户还没真正部署前，就能提前算出账户地址
-       - 第一次发 UserOperation 时，可以通过 initCode 自动部署账户
-       - 同一个 owner + salt 只会对应一个账户地址
-
-    注意：
-    - 这不是 Paymaster。
-    - 这不是多签。
+    重要说明：
+    - 这不是多签钱包。
     - 这不是社交恢复钱包。
+    - 这不是 Paymaster。
     - 这不是插件化 ERC-7579 账户。
-    - 这是一个干净、清晰、适合作为正式项目前置模板的 ERC-4337 单 owner 智能账户。
+    - 这是一个清晰、可审计、适合作为 ERC-4337 项目基础账户的模板。
+
+    编译建议：
+    - npm install @openzeppelin/contracts@5.6.1
+    - Hardhat compiler 建议使用 0.8.30。
+    - 如果你坚持 compiler 0.8.24，请确保 evmVersion 配置合理。
+
+    上线建议：
+    - 跑单元测试。
+    - 跑 fork 测试。
+    - 跑 bundler simulation。
+    - 核对 EntryPoint 地址和 bundler 支持版本。
+    - 正式主网上线前做第三方审计。
 */
 
 import {Account} from "@openzeppelin/contracts/account/Account.sol";
 import {IEntryPoint} from "@openzeppelin/contracts/interfaces/draft-IERC4337.sol";
 import {SignerECDSA} from "@openzeppelin/contracts/utils/cryptography/signers/SignerECDSA.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {IERC1271} from "@openzeppelin/contracts/interfaces/IERC1271.sol";
@@ -47,66 +51,156 @@ import {ERC1155Holder} from "@openzeppelin/contracts/token/ERC1155/utils/ERC1155
 
 /**
  * @title My4337SmartAccount
- * @notice ERC-4337 智能账户本体
- *
- * 大白话解释：
- * - 这个合约就是“用户的钱包”。
- * - owner 是真正控制这个钱包的人，一般是一个 EOA 地址。
- * - owner 不直接发普通交易，而是签一个 UserOperation。
- * - bundler 把 UserOperation 交给 EntryPoint。
- * - EntryPoint 调用本合约的 validateUserOp 校验签名。
- * - 校验通过后，EntryPoint 再调用本合约的 execute / executeBatch 执行真正的交易。
+ * @notice 单 owner ERC-4337 智能账户
  */
 contract My4337SmartAccount is
     Account,
     SignerECDSA,
+    EIP712,
     Initializable,
     ERC721Holder,
     ERC1155Holder,
     IERC1271
 {
     /**
-     * @dev EntryPoint 是 ERC-4337 的核心调度合约。
+     * @notice 账户合约版本。
      *
-     * 为什么做成 immutable？
-     * - 一旦账户部署好，就不应该随便换 EntryPoint。
-     * - 如果可以被恶意换掉，账户安全边界就坏了。
+     * 大白话：
+     * - 给前端、SDK、监控系统、测试脚本用。
+     * - 避免链上部署多个版本后分不清 ABI / 行为差异。
+     */
+    string public constant ACCOUNT_VERSION = "1.0.0";
+
+    /**
+     * @dev 当前账户绑定的 EntryPoint。
      *
-     * 注意：
-     * - 部署 factory 时传进来的 EntryPoint 地址，必须和你的 bundler 使用的 EntryPoint 地址一致。
-     * - 比如你用 v0.9 EntryPoint，就传 v0.9 地址。
-     * - 你用 v0.8 / v0.7，就传对应版本地址。
+     * 大白话：
+     * - ERC-4337 的 UserOperation 都要通过 EntryPoint。
+     * - 只有这个 EntryPoint 能调用 validateUserOp。
+     * - 只有这个 EntryPoint 或账户自己能调用 execute / executeBatch / changeOwner / withdrawDepositTo。
      */
     IEntryPoint private immutable _entryPoint;
 
     /**
-     * @dev ERC-1271 魔法值。
+     * @dev 单次 batch 最大调用数量。
      *
-     * DApp 调用 isValidSignature 时：
-     * - 如果签名有效，返回 0x1626ba7e
-     * - 如果签名无效，返回 0xffffffff
+     * 大白话：
+     * - 一次最多执行 32 个 call。
+     * - 太大容易 gas 爆掉，也会让 bundler 模拟不稳定。
+     *
+     * 为什么这里硬编码成 constant？
+     * - 不占存储。
+     * - 没有管理员可改配置，少一个权限风险点。
+     * - clone 账户行为稳定，方便审计和前端适配。
+     *
+     * 如果你的业务确实需要更大 batch：
+     * - 改源码里的这个常量。
+     * - 重新部署 factory 和 implementation。
+     * - 不建议做成运行时可变参数，除非你真的需要治理或管理员配置。
+     */
+    uint256 public constant MAX_BATCH_SIZE = 32;
+
+    /**
+     * @dev ERC-1271 成功魔法值。
+     *
+     * 标准要求：
+     * - 签名有效时返回 0x1626ba7e。
      */
     bytes4 private constant _ERC1271_MAGICVALUE = IERC1271.isValidSignature.selector;
+
+    /**
+     * @dev ERC-1271 失败返回值。
+     *
+     * 常见约定：
+     * - 签名无效时返回 0xffffffff。
+     */
     bytes4 private constant _ERC1271_INVALID = 0xffffffff;
+
+    /**
+     * @dev 自定义 domain-bound 签名的 EIP-712 typehash。
+     *
+     * 这个不是 ERC-1271 标准的一部分。
+     * 它只是给你自己的业务做更清晰、更抗重放的 typed data 验签。
+     *
+     * 前端 typed data：
+     *
+     * types: {
+     *   ERC1271ReplaySafeMessage: [
+     *     { name: "entryPoint", type: "address" },
+     *     { name: "appHash", type: "bytes32" }
+     *   ]
+     * }
+     *
+     * domain:
+     * {
+     *   name: "My4337SmartAccount",
+     *   version: "1",
+     *   chainId: 当前链 ID,
+     *   verifyingContract: 当前智能账户地址
+     * }
+     *
+     * message:
+     * {
+     *   entryPoint: 当前 EntryPoint 地址,
+     *   appHash: 你的业务 hash
+     * }
+     *
+     * 注意：
+     * - appHash 里仍然应该包含业务 nonce、deadline、订单 ID、DApp ID、目标合约、操作类型等。
+     * - 否则同一个 appHash 在同一个账户、同一条链、同一个 EntryPoint 下仍然可以重复验证。
+     */
+    bytes32 private constant _ERC1271_REPLAY_SAFE_TYPEHASH =
+        keccak256("ERC1271ReplaySafeMessage(address entryPoint,bytes32 appHash)");
 
     error SmartAccountZeroAddress();
     error SmartAccountInvalidTarget();
+    error SmartAccountEmptyBatch();
+    error SmartAccountBatchTooLarge(uint256 length, uint256 maxLength);
+    error SmartAccountInsufficientDeposit(uint256 requested, uint256 available);
+    error SmartAccountOwnerUnchanged(address owner);
 
     event OwnerChanged(address indexed oldOwner, address indexed newOwner);
-    event Executed(address indexed target, uint256 value, bytes data, bytes returnData);
-    event BatchExecuted(uint256 callsCount);
 
     /**
-     * @dev 批量执行时用的结构体。
+     * @notice 单笔执行事件。
+     *
+     * 大白话：
+     * - 不把完整 data 写进 event。
+     * - 不把 returnData 写进 event。
+     * - 只记录 dataHash，省 gas。
+     * - 完整 calldata 可以从交易 input / trace 里拿。
+     */
+    event Executed(
+        address indexed target,
+        uint256 value,
+        bytes32 indexed dataHash
+    );
+
+    /**
+     * @notice 批量执行事件。
+     *
+     * 大白话：
+     * - 不把整个 calls 数组写入 event。
+     * - 只记录 callsHash。
+     * - 完整 calls 可以从交易 input / trace 里还原。
+     */
+    event BatchExecuted(
+        uint256 callsCount,
+        bytes32 indexed callsHash
+    );
+
+    /**
+     * @dev 批量调用结构体。
      *
      * target:
      * - 要调用的目标合约地址。
      *
      * value:
      * - 要带过去的 ETH 数量。
+     * - 这笔 ETH 来自智能账户自己的余额。
      *
      * data:
-     * - 要调用的函数 calldata。
+     * - 调用目标合约的 calldata。
      */
     struct Call {
         address target;
@@ -115,44 +209,46 @@ contract My4337SmartAccount is
     }
 
     /**
-     * @notice 构造函数只给“实现合约 implementation”用。
+     * @notice implementation 构造函数。
      *
-     * 大白话解释：
-     * - 工厂会先部署一个 implementation。
-     * - 后续每个用户账户都是这个 implementation 的 clone。
-     * - clone 不会跑构造函数，所以真正的 owner 要在 initialize 里设置。
+     * 大白话：
+     * - Factory 会先部署一个 implementation。
+     * - 每个用户账户都是这个 implementation 的 clone。
+     * - clone 不跑构造函数，所以 owner 在 initialize 里设置。
      *
-     * 为什么 SignerECDSA(address(1))？
-     * - SignerECDSA 的父构造函数要求传一个 signer。
-     * - implementation 本身不是用户钱包，不应该被使用。
-     * - 所以这里塞一个无意义地址，然后马上 _disableInitializers 锁住 implementation。
+     * SignerECDSA(address(type(uint160).max))：
+     * - implementation 本身不是用户钱包。
+     * - 这里给一个很明显的哑 signer。
+     * - 不使用 address(1)，避免让人误以为和 ecrecover 预编译地址有关。
+     * - 真正 clone 账户会在 initialize 里写入真实 owner。
      *
-     * 为什么 _disableInitializers？
-     * - 防止别人直接初始化 implementation。
-     * - 真正的用户账户 clone 仍然可以 initialize，因为 clone 有自己的存储。
+     * EIP712("My4337SmartAccount", "1")：
+     * - 给自定义 domain-bound ERC-1271 验签辅助函数使用。
+     * - 在 clone 场景下，OZ v5.x 的 _domainSeparatorV4 会因为 address(this) 不等于缓存地址而重建 domain。
+     * - 重建时 verifyingContract 会是 clone 地址。
      */
-    constructor(IEntryPoint entryPoint_) SignerECDSA(address(1)) {
+    constructor(IEntryPoint entryPoint_)
+        SignerECDSA(address(type(uint160).max))
+        EIP712("My4337SmartAccount", "1")
+    {
         if (address(entryPoint_) == address(0)) {
             revert SmartAccountZeroAddress();
         }
 
         _entryPoint = entryPoint_;
 
-        // 锁死 implementation，避免别人把 implementation 当账户抢先初始化。
+        // 锁死 implementation，防止别人把 implementation 当成账户初始化。
         _disableInitializers();
     }
 
     /**
-     * @notice 初始化 clone 账户，设置 owner。
+     * @notice 初始化 clone 账户。
      *
-     * 大白话解释：
-     * - 每个 clone 刚创建出来时，owner 还没写进去。
-     * - 工厂会在 clone 创建后立刻调用 initialize(owner)。
-     * - initializer 保证这个函数只能成功执行一次。
+     * @param owner_ 账户 owner，一般是用户 EOA。
      *
-     * 安全点：
-     * - 不允许 owner 是 0 地址。
-     * - 工厂部署 clone 后立刻初始化，中间没有外部可插队窗口。
+     * 大白话：
+     * - 每个 clone 只能初始化一次。
+     * - 工厂部署 clone 后会立刻调用 initialize。
      */
     function initialize(address owner_) external initializer {
         if (owner_ == address(0)) {
@@ -165,22 +261,37 @@ contract My4337SmartAccount is
     }
 
     /**
+     * @notice 接收 ETH。
+     *
+     * 大白话：
+     * - 账户可以直接收 ETH。
+     * - 收 ETH 不会触发 execute。
+     * - 给账户充值普通 ETH，就直接转账到这个账户地址。
+     */
+    receive() external payable override {}
+
+    /**
+     * @notice 返回账户合约版本。
+     *
+     * @return 当前账户合约版本号。
+     */
+    function version() external pure returns (string memory) {
+        return ACCOUNT_VERSION;
+    }
+
+    /**
      * @notice 返回当前账户 owner。
      *
-     * 大白话解释：
-     * - SignerECDSA 里把控制账户的人叫 signer。
-     * - 这里为了更像钱包，把它包装成 owner。
+     * @return 当前控制账户的 EOA 地址。
      */
     function owner() external view returns (address) {
         return signer();
     }
 
     /**
-     * @notice 返回本账户信任的 EntryPoint。
+     * @notice 返回当前账户信任的 EntryPoint。
      *
-     * 大白话解释：
-     * - 只有这个 EntryPoint 能调用 validateUserOp。
-     * - 只有这个 EntryPoint 或账户自己能调用 execute。
+     * @return 当前账户绑定的 EntryPoint 合约。
      */
     function entryPoint() public view override returns (IEntryPoint) {
         return _entryPoint;
@@ -189,16 +300,13 @@ contract My4337SmartAccount is
     /**
      * @notice 更换账户 owner。
      *
-     * 大白话解释：
-     * - 旧 owner 签一个 UserOperation。
-     * - UserOperation 的 callData 调这个函数。
-     * - 执行成功后，新 owner 接管账户。
+     * @param newOwner 新 owner 地址。
      *
-     * 为什么 onlyEntryPointOrSelf？
-     * - 不能让任何人直接调用改 owner。
-     * - 正常路径必须是：
-     *   owner 签名 -> EntryPoint 校验 -> 账户执行。
-     * - address(this) 自己也可以调用，是为了支持未来账户内部流程或批量调用。
+     * 大白话：
+     * - 只能通过 EntryPoint 验证后的 UserOperation 调用。
+     * - 或者账户自己调用自己。
+     * - 不允许把 owner 改成 0 地址。
+     * - 不允许把 owner 改成当前 owner。
      */
     function changeOwner(address newOwner) external onlyEntryPointOrSelf {
         if (newOwner == address(0)) {
@@ -206,6 +314,10 @@ contract My4337SmartAccount is
         }
 
         address oldOwner = signer();
+
+        if (newOwner == oldOwner) {
+            revert SmartAccountOwnerUnchanged(newOwner);
+        }
 
         _setSigner(newOwner);
 
@@ -215,87 +327,104 @@ contract My4337SmartAccount is
     /**
      * @notice 执行一笔外部调用。
      *
-     * 大白话解释：
-     * - 这就是智能账户真正“花钱 / 调合约”的地方。
-     * - 例如：
-     *   - 给别人转 ETH
-     *   - 调 ERC20.transfer
-     *   - 调 NFT 合约
-     *   - 调 DeFi 合约
+     * @param target 目标合约地址。
+     * @param value 要从账户余额转出的 ETH 数量。
+     * @param data 调用目标合约的 calldata。
      *
-     * 谁能调用？
-     * - EntryPoint 可以调用。
-     * - 账户自己可以调用。
+     * @return returnData 目标合约返回的数据。
      *
-     * 谁不能调用？
-     * - owner 直接用普通交易调用也不行。
-     * - 因为 ERC-4337 的安全路径是 UserOperation，不是 owner 直接 msg.sender。
+     * 大白话：
+     * - 这就是智能账户真正调用外部合约的地方。
+     * - 只能 EntryPoint 或账户自己调用。
+     * - 这里故意不是 payable。
+     * - 如果要给账户转 ETH，直接转到账户地址，走 receive。
+     * - event 里只记录 keccak256(data)，不记录完整 data / returnData，节省日志成本。
      */
     function execute(
         address target,
         uint256 value,
         bytes calldata data
-    ) external payable onlyEntryPointOrSelf returns (bytes memory returnData) {
+    ) external onlyEntryPointOrSelf returns (bytes memory returnData) {
         returnData = _call(target, value, data);
 
-        emit Executed(target, value, data, returnData);
+        emit Executed(target, value, keccak256(data));
     }
 
     /**
      * @notice 批量执行多笔外部调用。
      *
-     * 大白话解释：
-     * - 一次 UserOperation 里做多件事。
-     * - 例如：
-     *   1. approve
-     *   2. swap
-     *   3. transfer
+     * @param calls 调用数组。
      *
-     * 注意：
-     * - 当前设计是“只要其中一笔失败，整个批量都回滚”。
-     * - 这对资产安全更友好，避免只执行了一半。
+     * @return returnData 每个 call 的返回数据。
+     *
+     * 大白话：
+     * - 一次 UserOperation 里做多件事。
+     * - 例如 approve + swap + transfer。
+     * - 空数组会 revert。
+     * - 超过 MAX_BATCH_SIZE 会 revert。
+     * - 任意一笔失败，整个 batch 回滚。
+     * - event 里只记录 callsHash，不记录完整 calls。
      */
     function executeBatch(
         Call[] calldata calls
-    ) external payable onlyEntryPointOrSelf returns (bytes[] memory returnData) {
+    ) external onlyEntryPointOrSelf returns (bytes[] memory returnData) {
         uint256 length = calls.length;
+
+        if (length == 0) {
+            revert SmartAccountEmptyBatch();
+        }
+
+        if (length > MAX_BATCH_SIZE) {
+            revert SmartAccountBatchTooLarge(length, MAX_BATCH_SIZE);
+        }
+
+        // 只把 calls 的 hash 写进 event。
+        // 完整 calls 本来就在交易 calldata 里，链下可以通过 tx input 或 trace 还原。
+        bytes32 callsHash = keccak256(abi.encode(calls));
+
         returnData = new bytes[](length);
 
         for (uint256 i = 0; i < length; i++) {
-            returnData[i] = _call(calls[i].target, calls[i].value, calls[i].data);
+            returnData[i] = _call(
+                calls[i].target,
+                calls[i].value,
+                calls[i].data
+            );
         }
 
-        emit BatchExecuted(length);
+        emit BatchExecuted(length, callsHash);
     }
 
     /**
-     * @notice 查询这个账户在 EntryPoint 里的押金余额。
+     * @notice 查询账户在 EntryPoint 里的押金余额。
      *
-     * 大白话解释：
-     * - ERC-4337 里，账户可以提前往 EntryPoint 存 ETH。
-     * - bundler 执行 UserOperation 时，EntryPoint 会从这个押金里扣 gas。
+     * @return 当前账户存在 EntryPoint 里的 ETH 押金。
      */
-    function getDeposit() external view returns (uint256) {
+    function getDeposit() public view returns (uint256) {
         return entryPoint().balanceOf(address(this));
     }
 
     /**
-     * @notice 往 EntryPoint 给本账户充值押金。
+     * @notice 给本账户在 EntryPoint 里充值押金。
      *
-     * 大白话解释：
-     * - 任何人都可以帮这个账户充值。
-     * - 充值的钱记在 EntryPoint 里，归本账户所有。
+     * 大白话：
+     * - 任何人都可以帮这个账户充值 EntryPoint 押金。
+     * - 押金用于 ERC-4337 UserOperation 的 gas 结算。
      */
     function addDeposit() external payable {
         entryPoint().depositTo{value: msg.value}(address(this));
     }
 
     /**
-     * @notice 从 EntryPoint 把本账户押金提出来。
+     * @notice 从 EntryPoint 提出本账户押金。
      *
-     * 大白话解释：
-     * - 只有通过 UserOperation 验证后的账户操作，才能把押金取走。
-     * - 防止外部地址直接把押金偷走。
+     * @param to 接收押金的地址。
+     * @param amount 提现金额。
+     *
+     * 大白话：
+     * - 只能通过 EntryPoint 验证后的 UserOperation 调用。
+     * - 或者账户自己调用自己。
+     * - amount 不能超过当前押金余额。
      */
     function withdrawDepositTo(
         address payable to,
@@ -305,30 +434,128 @@ contract My4337SmartAccount is
             revert SmartAccountZeroAddress();
         }
 
+        uint256 available = getDeposit();
+
+        if (amount > available) {
+            revert SmartAccountInsufficientDeposit(amount, available);
+        }
+
         entryPoint().withdrawTo(to, amount);
     }
 
     /**
-     * @notice ERC-1271 签名校验。
+     * @notice 标准 ERC-1271 签名校验。
      *
-     * 大白话解释：
-     * - 很多 DApp 会问：
-     *   “这个智能合约钱包是不是真的同意了这个签名？”
-     * - EOA 可以用 ecrecover。
-     * - 智能账户没有私钥，所以要实现 ERC-1271。
+     * @param hash 调用方传入的 digest。
+     * @param signature owner 对 hash 的签名。
      *
-     * 这里的规则：
-     * - 只要当前 owner 的 ECDSA 签名能验证 hash，就返回成功魔法值。
+     * @return magicValue 签名有效返回 0x1626ba7e，签名无效返回 0xffffffff。
      *
-     * 注意：
-     * - 这里验证的是“传进来的 hash 本身”。
-     * - 前端/后端必须保证 hash 的生成方式和 DApp 预期一致。
+     * 重要安全说明：
+     * - 这个函数是为了兼容第三方 DApp。
+     * - 它验证的是调用方传进来的 hash。
+     * - 它不会自动加入 chainId。
+     * - 它不会自动加入 verifyingContract。
+     * - 它不会自动加入 nonce。
+     * - 它不会自动加入 deadline。
+     *
+     * 因此：
+     * - 第三方 DApp 必须自己保证 hash 已经做好防重放。
+     * - 比如 hash 是 EIP-712 digest，并且 domain 里包含 chainId 和 verifyingContract。
+     * - 如果 hash 是裸 keccak256(message)，就可能有跨链、跨合约、跨场景重放风险。
+     *
+     * 更安全的自有业务接入建议：
+     * - 不要直接用这个标准函数验裸 hash。
+     * - 优先使用 erc1271ReplaySafeHash / isValidReplaySafeSignature / isValidReplaySafeSignature1271。
      */
     function isValidSignature(
         bytes32 hash,
         bytes calldata signature
-    ) external view override returns (bytes4) {
+    ) external view override returns (bytes4 magicValue) {
         bool ok = _rawSignatureValidation(hash, signature);
+
+        return ok ? _ERC1271_MAGICVALUE : _ERC1271_INVALID;
+    }
+
+    /**
+     * @notice 生成自有业务使用的 EIP-712 domain-bound digest。
+     *
+     * @param appHash 业务层 hash。
+     *
+     * @return digest 最终要让 owner 签名的 EIP-712 digest。
+     *
+     * 大白话：
+     * - 这个函数会把 appHash 绑定到：
+     *   1. 当前 chainId
+     *   2. 当前智能账户地址
+     *   3. 当前 EntryPoint 地址
+     *
+     * 但它不是万能防重放：
+     * - 同一个 appHash 在同一个账户、同一条链、同一个 EntryPoint 下仍然会得到同一个 digest。
+     * - 所以 appHash 里应该包含业务自己的 nonce、deadline、orderId、actionId、DApp ID、目标合约、操作类型等字段。
+     */
+    function erc1271ReplaySafeHash(
+        bytes32 appHash
+    ) public view returns (bytes32 digest) {
+        bytes32 structHash = keccak256(
+            abi.encode(
+                _ERC1271_REPLAY_SAFE_TYPEHASH,
+                address(entryPoint()),
+                appHash
+            )
+        );
+
+        return _hashTypedDataV4(structHash);
+    }
+
+    /**
+     * @notice 自有业务使用的 domain-bound 签名验证，返回 bool。
+     *
+     * @param appHash 业务层 hash。
+     * @param signature owner 对 erc1271ReplaySafeHash(appHash) 的签名。
+     *
+     * @return valid 签名有效返回 true，否则返回 false。
+     *
+     * 大白话：
+     * - 这个不是 ERC-1271 标准函数。
+     * - 这是给你自己的业务合约、后端、前端使用的辅助函数。
+     * - 返回 bool 更直观。
+     *
+     * 注意：
+     * - 这个函数是 view，不能消耗 nonce，也不能标记签名已用。
+     * - 真正的一次性签名，仍然需要业务合约或后端自己记录 nonce / usedHash。
+     */
+    function isValidReplaySafeSignature(
+        bytes32 appHash,
+        bytes calldata signature
+    ) external view returns (bool valid) {
+        return _isValidReplaySafeSignature(appHash, signature);
+    }
+
+    /**
+     * @notice 自有业务使用的严格 ERC-1271 风格 wrapper。
+     *
+     * @param appHash 业务层 hash。
+     * @param signature owner 对 erc1271ReplaySafeHash(appHash) 的签名。
+     *
+     * @return magicValue 签名有效返回 0x1626ba7e，签名无效返回 0xffffffff。
+     *
+     * 大白话：
+     * - 这个函数不是标准 ERC-1271 selector。
+     * - 它是“严格模式”验签入口。
+     * - 它不会直接验证裸 hash。
+     * - 它会先把 appHash 包进 EIP-712 domain：
+     *   chainId + 当前账户地址 + 当前 EntryPoint 地址。
+     *
+     * 推荐接入方式：
+     * - 你的自有 DApp、后端、业务合约优先调这个函数。
+     * - 第三方通用 DApp 需要兼容 ERC-1271 时，才使用标准 isValidSignature(hash, signature)。
+     */
+    function isValidReplaySafeSignature1271(
+        bytes32 appHash,
+        bytes calldata signature
+    ) external view returns (bytes4 magicValue) {
+        bool ok = _isValidReplaySafeSignature(appHash, signature);
 
         return ok ? _ERC1271_MAGICVALUE : _ERC1271_INVALID;
     }
@@ -336,23 +563,54 @@ contract My4337SmartAccount is
     /**
      * @notice ERC165 接口声明。
      *
-     * 大白话解释：
+     * @param interfaceId 接口 ID。
+     *
+     * @return 支持该接口则返回 true。
+     *
+     * 大白话：
      * - ERC1155Holder 自带 supportsInterface。
-     * - 这里额外告诉外界：我也支持 ERC-1271。
+     * - 这里额外声明支持 ERC-1271。
      */
     function supportsInterface(
         bytes4 interfaceId
     ) public view override(ERC1155Holder) returns (bool) {
-        return interfaceId == type(IERC1271).interfaceId || super.supportsInterface(interfaceId);
+        return
+            interfaceId == type(IERC1271).interfaceId ||
+            super.supportsInterface(interfaceId);
     }
 
     /**
-     * @dev 内部低级调用函数。
+     * @dev 内部 replay-safe 签名验证。
      *
-     * 大白话解释：
-     * - 真正调用 target 的地方。
-     * - 如果 target 调用失败，把 target 的失败原因原样抛出去。
-     * - 这样前端、bundler、测试脚本能看到真实 revert reason。
+     * @param appHash 业务层 hash。
+     * @param signature owner 对 replay-safe digest 的签名。
+     *
+     * @return valid 签名有效返回 true，否则返回 false。
+     */
+    function _isValidReplaySafeSignature(
+        bytes32 appHash,
+        bytes calldata signature
+    ) internal view returns (bool valid) {
+        return _rawSignatureValidation(
+            erc1271ReplaySafeHash(appHash),
+            signature
+        );
+    }
+
+    /**
+     * @dev 内部低级调用。
+     *
+     * @param target 目标地址。
+     * @param value 转出的 ETH 数量。
+     * @param data 调用 calldata。
+     *
+     * @return returnData 目标调用返回数据。
+     *
+     * 大白话：
+     * - execute 和 executeBatch 最终都会走这里。
+     * - target 不能是 0 地址。
+     * - data 保持 calldata，避免无意义 memory 拷贝。
+     * - 如果目标调用失败，原样抛出目标合约的 revert reason。
      */
     function _call(
         address target,
@@ -379,36 +637,47 @@ contract My4337SmartAccount is
  * @title My4337SmartAccountFactory
  * @notice ERC-4337 智能账户工厂
  *
- * 大白话解释：
- * - 工厂负责创建用户的钱包账户。
- * - 使用 CREATE2 deterministic clone。
- * - 也就是还没部署前，就能算出账户地址。
- *
- * ERC-4337 典型流程：
- * 1. 前端调用 getAddress(owner, salt)，提前算出账户地址。
- * 2. 如果账户还没部署，UserOperation 里填 initCode。
- * 3. initCode = factory 地址 + createAccount(owner, salt) 的 calldata。
- * 4. EntryPoint 在处理 UserOperation 时，会先调用工厂部署账户。
- * 5. 部署完后，EntryPoint 再调用账户的 validateUserOp。
+ * 大白话：
+ * - 工厂负责用 CREATE2 创建账户。
+ * - owner + userSalt 可以提前算出账户地址。
+ * - 第一次 UserOperation 可以通过 initCode 自动部署账户。
  */
 contract My4337SmartAccountFactory {
     /**
-     * @notice 所有 clone 都指向这个 implementation。
+     * @notice 工厂合约版本。
      *
-     * 大白话解释：
-     * - implementation 是逻辑合约。
-     * - 每个用户账户是一个很小的 clone。
-     * - clone 通过 delegatecall 使用 implementation 的代码。
-     * - 每个 clone 有自己的独立存储，所以每个用户的 owner 不一样。
+     * 大白话：
+     * - 给前端、SDK、监控系统、测试脚本用。
+     */
+    string public constant FACTORY_VERSION = "1.0.0";
+
+    /**
+     * @notice 所有 clone 共用的 implementation。
      */
     address public immutable implementation;
 
     /**
-     * @notice 这个工厂创建出来的账户统一绑定这个 EntryPoint。
+     * @notice 工厂绑定的 EntryPoint。
      */
     IEntryPoint public immutable entryPoint;
 
-    error FactoryZeroAddress();
+    /**
+     * @dev EntryPoint 地址为 0。
+     *
+     * 大白话：
+     * - 部署 Factory 时必须传入有效 EntryPoint。
+     * - EntryPoint 是 ERC-4337 的核心入口，不能是 0 地址。
+     */
+    error FactoryEntryPointZeroAddress();
+
+    /**
+     * @dev owner 地址为 0。
+     *
+     * 大白话：
+     * - 创建账户、预计算账户地址、生成 initCode 时，owner 不能是 0 地址。
+     * - 因为 owner 是真正控制智能账户的人。
+     */
+    error FactoryOwnerZeroAddress();
 
     event AccountCreated(
         address indexed account,
@@ -418,78 +687,158 @@ contract My4337SmartAccountFactory {
     );
 
     /**
-     * @notice 部署工厂时，传入你要使用的 EntryPoint 地址。
+     * @notice 部署工厂。
      *
-     * 大白话解释：
-     * - 一个 factory 通常绑定一个 EntryPoint。
-     * - 如果你要换 EntryPoint 版本，建议重新部署 factory。
+     * @param entryPoint_ ERC-4337 EntryPoint 地址。
+     *
+     * 大白话：
+     * - 一个 factory 绑定一个 EntryPoint。
+     * - 如果要换 EntryPoint 版本，建议重新部署 factory。
      */
     constructor(IEntryPoint entryPoint_) {
         if (address(entryPoint_) == address(0)) {
-            revert FactoryZeroAddress();
+            revert FactoryEntryPointZeroAddress();
         }
 
         entryPoint = entryPoint_;
 
         // 部署 implementation。
-        // implementation 构造函数里会锁住 initialize，避免被别人直接初始化。
+        // implementation 构造函数里会锁住 initialize。
         implementation = address(new My4337SmartAccount(entryPoint_));
     }
 
     /**
-     * @notice 创建账户；如果账户已经存在，就直接返回已有地址。
+     * @notice 返回工厂合约版本。
      *
-     * 大白话解释：
-     * - owner + salt 唯一决定一个账户地址。
+     * @return 当前工厂合约版本号。
+     */
+    function version() external pure returns (string memory) {
+        return FACTORY_VERSION;
+    }
+
+    /**
+     * @notice 创建账户；如果账户已存在，直接返回已有账户地址。
+     *
+     * @param owner_ 账户 owner。
+     * @param userSalt_ 用户自定义 salt。
+     *
+     * @return account 智能账户地址。
+     *
+     * 大白话：
+     * - owner + userSalt 唯一决定账户地址。
      * - 同一组参数不会重复部署。
-     * - 谁来调用都没关系，因为 owner 是显式传入并立即初始化的，别人抢跑也不能改成自己的 owner。
+     * - 谁调用都没关系，因为 owner 是参数里固定传入的。
      */
     function createAccount(
         address owner_,
         bytes32 userSalt_
     ) external returns (address account) {
-        if (owner_ == address(0)) {
-            revert FactoryZeroAddress();
-        }
+        _checkOwner(owner_);
 
         bytes32 finalSalt = _finalSalt(owner_, userSalt_);
 
-        account = Clones.predictDeterministicAddress(
-            implementation,
-            finalSalt,
-            address(this)
-        );
+        account = _accountAddress(finalSalt);
 
-        // 如果已经部署过，直接返回。
-        // 这对 ERC-4337 很重要，因为某些情况下 bundler 或前端可能重复模拟。
         if (account.code.length != 0) {
             return account;
         }
 
-        // 用 CREATE2 部署 clone。
         account = Clones.cloneDeterministic(implementation, finalSalt);
 
-        // 部署后立即初始化 owner。
-        // 这一步必须和部署在同一个交易里完成，避免未初始化账户被别人接管。
         My4337SmartAccount(payable(account)).initialize(owner_);
 
         emit AccountCreated(account, owner_, userSalt_, finalSalt);
     }
 
     /**
-     * @notice 计算 owner + salt 对应的账户地址。
+     * @notice 预计算账户地址，不部署。
      *
-     * 大白话解释：
-     * - 不会真的部署账户。
-     * - 只是提前算地址。
-     * - 前端创建 UserOperation 前通常会先调这个函数。
+     * @param owner_ 账户 owner。
+     * @param userSalt_ 用户自定义 salt。
+     *
+     * @return account 预计算出来的智能账户地址。
      */
     function getAddress(
         address owner_,
         bytes32 userSalt_
-    ) external view returns (address) {
+    ) external view returns (address account) {
+        _checkOwner(owner_);
+
         bytes32 finalSalt = _finalSalt(owner_, userSalt_);
 
+        return _accountAddress(finalSalt);
+    }
+
+    /**
+     * @notice 永远生成 ERC-4337 UserOperation 里的 initCode。
+     *
+     * @param owner_ 账户 owner。
+     * @param userSalt_ 用户自定义 salt。
+     *
+     * @return initCode UserOperation 使用的 initCode。
+     *
+     * 大白话：
+     * - 这个函数无论账户是否已经部署，都会返回 initCode。
+     * - 适合某些 SDK 固定想拿 initCode 的场景。
+     * - 但生产前端通常更建议用 getInitCodeIfNeeded。
+     *
+     * 返回格式：
+     * - 前 20 字节：factory 地址。
+     * - 后面：createAccount(owner, salt) 的 calldata。
+     */
+    function getInitCode(
+        address owner_,
+        bytes32 userSalt_
+    ) external view returns (bytes memory initCode) {
+        _checkOwner(owner_);
+
+        return _initCode(owner_, userSalt_);
+    }
+
+    /**
+     * @notice 按需生成 initCode。
+     *
+     * @param owner_ 账户 owner。
+     * @param userSalt_ 用户自定义 salt。
+     *
+     * @return initCode 如果账户未部署，返回 initCode；如果账户已部署，返回空 bytes。
+     *
+     * 大白话：
+     * - 账户还没部署：返回 factory + createAccount calldata。
+     * - 账户已经部署：返回空 bytes。
+     * - 这个更适合生产前端和后端组装 UserOperation。
+     */
+    function getInitCodeIfNeeded(
+        address owner_,
+        bytes32 userSalt_
+    ) external view returns (bytes memory initCode) {
+        _checkOwner(owner_);
+
+        bytes32 finalSalt = _finalSalt(owner_, userSalt_);
+        address account = _accountAddress(finalSalt);
+
+        if (account.code.length != 0) {
+            return "";
+        }
+
+        return _initCode(owner_, userSalt_);
+    }
+
+    /**
+     * @dev 检查 owner 不是 0 地址。
+     */
+    function _checkOwner(address owner_) internal pure {
+        if (owner_ == address(0)) {
+            revert FactoryOwnerZeroAddress();
+        }
+    }
+
+    /**
+     * @dev 根据 finalSalt 预计算账户地址。
+     */
+    function _accountAddress(
+        bytes32 finalSalt
+    ) internal view returns (address account) {
         return Clones.predictDeterministicAddress(
             implementation,
             finalSalt,
@@ -498,26 +847,15 @@ contract My4337SmartAccountFactory {
     }
 
     /**
-     * @notice 生成 ERC-4337 UserOperation 里的 initCode。
+     * @dev 内部生成 initCode。
      *
-     * 大白话解释：
-     * - 如果账户还没部署，UserOperation 需要带 initCode。
-     * - EntryPoint 会根据 initCode 去调用 factory。
-     *
-     * 返回值格式：
-     * - 前 20 字节：factory 地址
-     * - 后面：createAccount(owner, salt) 的 calldata
-     *
-     * 前端也可以自己拼：
-     * abi.encodePacked(
-     *     address(factory),
-     *     abi.encodeCall(factory.createAccount, (owner, salt))
-     * )
+     * 大白话：
+     * - initCode = factory 地址 + createAccount(owner, salt) calldata。
      */
-    function getInitCode(
+    function _initCode(
         address owner_,
         bytes32 userSalt_
-    ) external view returns (bytes memory) {
+    ) internal view returns (bytes memory initCode) {
         return abi.encodePacked(
             address(this),
             abi.encodeCall(this.createAccount, (owner_, userSalt_))
@@ -525,17 +863,22 @@ contract My4337SmartAccountFactory {
     }
 
     /**
-     * @dev 内部 salt 生成函数。
+     * @dev 内部 salt 生成。
      *
-     * 大白话解释：
-     * - 不直接使用用户传入的 userSalt。
+     * @param owner_ 账户 owner。
+     * @param userSalt_ 用户自定义 salt。
+     *
+     * @return finalSalt CREATE2 最终使用的 salt。
+     *
+     * 大白话：
+     * - 不直接用用户传入的 userSalt。
      * - 而是 keccak256(owner, userSalt)。
-     * - 好处是不同 owner 用同一个 salt，也不会撞出同一个地址。
+     * - 避免不同 owner 使用同一个 userSalt 时产生混淆。
      */
     function _finalSalt(
         address owner_,
         bytes32 userSalt_
-    ) internal pure returns (bytes32) {
+    ) internal pure returns (bytes32 finalSalt) {
         return keccak256(abi.encode(owner_, userSalt_));
     }
 }

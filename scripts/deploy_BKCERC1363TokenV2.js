@@ -92,7 +92,7 @@ async function main() {
      * =====================================================
      */
 
-    const BKCERC1363Token = await ethers.getContractFactory("BKCERC1363Token");
+    const BKCERC1363Token = await ethers.getContractFactory("BKCERC1363TokenV2");
 
     const token = await BKCERC1363Token.deploy(
         TOKEN_NAME,

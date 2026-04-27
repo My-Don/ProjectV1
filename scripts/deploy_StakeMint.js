@@ -55,12 +55,6 @@ async function main() {
     "contracts/StakeMint.sol:StakeMint"
   );
 
-  // 如果你的文件名是 contracts/StakeMint.final.v1.0.0.sol，
-  // 就把上面一行改成：
-  // const StakeMint = await ethers.getContractFactory(
-  //   "contracts/StakeMint.final.v1.0.0.sol:StakeMint"
-  // );
-
   console.log("\n合约工厂加载成功");
 
   // =========================

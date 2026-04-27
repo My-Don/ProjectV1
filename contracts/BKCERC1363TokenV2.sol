@@ -7,7 +7,7 @@ import {ERC20Capped} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20C
 import {AccessControlDefaultAdminRules} from "@openzeppelin/contracts/access/extensions/AccessControlDefaultAdminRules.sol";
 
 /**
- * @title BKCERC1363Token
+ * @title BKCERC1363TokenV2
  *
  * @notice
  * 这是一个 BKC 代币合约。
@@ -35,7 +35,7 @@ import {AccessControlDefaultAdminRules} from "@openzeppelin/contracts/access/ext
  * - admin 最好填多签钱包地址，不建议直接填个人 EOA 地址。
  * - adminTransferDelay 建议设置成 1 天或者更久，例如 86400 秒。
  */
-contract BKCERC1363Token is ERC1363, ERC20Capped, AccessControlDefaultAdminRules {
+contract BKCERC1363TokenV2 is ERC1363, ERC20Capped, AccessControlDefaultAdminRules {
     // =============================================================
     //                            角色定义
     // =============================================================

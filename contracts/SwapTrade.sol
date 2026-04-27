@@ -31,7 +31,7 @@ interface IUniswapV2Router02 {
     function swapExactTokensForTokens(
         uint256 amountIn,
         uint256 amountOutMin,
-        address[] memory path,
+        address[] calldata path,
         address to,
         uint256 deadline
     ) external returns (uint256[] memory amounts);
@@ -77,6 +77,10 @@ interface IUniswapV2Router02 {
  *   A. tokenIn -> tokenOut
  *   B. tokenIn -> middleToken -> tokenOut
  *   它不会搜索多个白名单 token 组成的复杂多跳路径。
+ *
+ * - 自动路径里的 getAmountsOut 会根据当前池子储备和当前输入数量计算输出，
+ *   所以它会反映当前这一笔交易的价格影响；
+ *   但它仍然只是当前区块状态的快照，不能防止后续区块价格变化或 MEV。
  *
  * - 大额交易更推荐使用 swapWithPath，由前端或用户自己传 path 和 amountOutMin。
  *
@@ -134,11 +138,15 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
     // 大白话：当前允许参与 swap、加池、移除池的 token。
     mapping(address => bool) public supportedToken;
 
-    // 大白话：曾经加入过白名单的 token。
+    // 大白话：曾经加入过白名单的 token，或者项目相关 LP token。
     // 作用：防止 owner 先把项目 token 移出白名单，再通过普通误转提现提走。
     mapping(address => bool) public everSupportedToken;
 
     // ========== 常量 ==========
+
+    // 大白话：自动滑点最小 0.01%。
+    // 原因：如果滑点传 0，amountOutMin 会等于当前报价，价格稍微变一点就容易失败。
+    uint256 public constant MIN_SLIPPAGE_BPS = 1;
 
     // 大白话：自动滑点最大 5%。100 = 1%，500 = 5%。
     uint256 public constant MAX_SLIPPAGE_BPS = 500;
@@ -149,8 +157,8 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
     // 大白话：用户不传 deadline 时，默认 30 分钟后过期。
     uint256 public constant DEFAULT_DEADLINE_SECONDS = 1800;
 
-    // 大白话：批量提现最多 100 个 token，防止数组过大。
-    uint256 private constant MAX_ARRAY_SIZE = 100;
+    // 大白话：批量提现最多 20 个 token，降低一次交易 gas 过大的风险。
+    uint256 private constant MAX_WITHDRAW_ARRAY_SIZE = 20;
 
     // 大白话：用户手动传 path 时，最多允许 5 个 token。
     uint256 public constant MAX_PATH_SIZE = 5;
@@ -212,6 +220,8 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
     event Refund(address indexed token, address indexed to, uint256 amount);
 
     event TokenSupportUpdated(address indexed token, bool supported);
+
+    event KnownAssetMarked(address indexed token);
 
     event RouterUpdateScheduled(
         address indexed oldRouter,
@@ -298,15 +308,13 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
      * 1. 必须先暂停合约，才能排队更新 Router。
      * 2. 如果已经有 Router 更新在排队，不能直接覆盖。
      * 3. 要改新的 Router，必须先取消旧的 pending Router。
+     * 4. 这里加 nonReentrant，避免恶意 Router 在 factory() 回调里制造重入干扰。
      */
-    function scheduleRouterUpdate(address newRouter) external onlyOwner whenPaused {
+    function scheduleRouterUpdate(address newRouter) external onlyOwner whenPaused nonReentrant {
         require(newRouter != address(0), "router zero");
         require(newRouter != uniswapV2Router, "same router");
-
-        // 大白话：防止连续 schedule，把旧的 pending 更新直接覆盖掉。
         require(pendingRouter == address(0), "pending router exists");
 
-        // 大白话：先检查新 Router 是不是一个基本可用的 Router。
         address newFactory = _validateRouter(newRouter);
 
         pendingRouter = newRouter;
@@ -348,8 +356,9 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
      * 2. 已经提前 schedule。
      * 3. 等待时间已经到。
      * 4. 执行时 Router 返回的 factory，必须和排队时记录的 pendingFactory 一致。
+     * 5. 真正执行的 Router 地址就是 pendingRouter，不会换成其他地址。
      */
-    function executeRouterUpdate() external onlyOwner whenPaused {
+    function executeRouterUpdate() external onlyOwner whenPaused nonReentrant {
         address newRouter = pendingRouter;
         address expectedFactory = pendingFactory;
 
@@ -360,22 +369,14 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
         address oldRouter = uniswapV2Router;
         address oldFactory = factory;
 
-        // 大白话：
-        // 执行前重新验证一次 Router。
-        // 如果这个 Router 是代理合约，或者它的 factory() 结果发生变化，
-        // 这里可以及时发现。
         address actualFactory = _validateRouter(newRouter);
 
-        // 大白话：
-        // 要求执行时的 factory 和排队时记录的 factory 一致。
         require(actualFactory == expectedFactory, "factory changed");
 
-        // 大白话：先清掉 pending 状态，避免后续逻辑混乱。
         pendingRouter = address(0);
         pendingFactory = address(0);
         pendingRouterExecuteAfter = 0;
 
-        // 大白话：正式切换 Router 和 Factory。
         uniswapV2Router = newRouter;
         factory = actualFactory;
 
@@ -394,6 +395,7 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
      */
     function setMiddleToken(address newMiddleToken) external onlyOwner whenPaused {
         require(newMiddleToken != address(0), "middle zero");
+        require(newMiddleToken != middleToken, "same middle");
         require(supportedToken[newMiddleToken], "middle unsupported");
 
         address oldMiddleToken = middleToken;
@@ -521,8 +523,10 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
         uint256 deadline
     ) external nonReentrant whenNotPaused returns (uint256 amountOut) {
         _requireSupportedPair(tokenIn, tokenOut);
-        require(to != address(0), "to zero");
+        _requireRecipient(to);
+
         require(amountIn > 0, "amountIn = 0");
+        require(slippageBps >= MIN_SLIPPAGE_BPS, "slippage too small");
         require(slippageBps <= MAX_SLIPPAGE_BPS, "slippage too large");
 
         (uint256 quotedOut, address[] memory path) = _bestQuoteAndPath(tokenIn, tokenOut, amountIn);
@@ -576,7 +580,8 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
         uint256 deadline
     ) external nonReentrant whenNotPaused returns (uint256 amountOut) {
         _requireSupportedPair(tokenIn, tokenOut);
-        require(to != address(0), "to zero");
+        _requireRecipient(to);
+
         require(amountIn > 0, "amountIn = 0");
         require(amountOutMin > 0, "minOut = 0");
 
@@ -625,7 +630,8 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
         address to,
         uint256 deadline
     ) external nonReentrant whenNotPaused returns (uint256 amountOut) {
-        require(to != address(0), "to zero");
+        _requireRecipient(to);
+
         require(amountIn > 0, "amountIn = 0");
         require(amountOutMin > 0, "minOut = 0");
 
@@ -683,7 +689,7 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
         returns (uint256 amountAActual, uint256 amountBActual, uint256 liquidity)
     {
         _requireSupportedPair(p.tokenA, p.tokenB);
-        require(p.to != address(0), "to zero");
+        _requireRecipient(p.to);
 
         require(p.amountA > 0 && p.amountB > 0, "amount zero");
         require(p.amountAMin > 0 && p.amountBMin > 0, "min zero");
@@ -713,6 +719,13 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
         _clearRouterApproval(p.tokenB);
 
         require(liquidity > 0, "no liquidity");
+
+        // 大白话：把这个交易对 LP 也标记为项目相关资产。
+        // 这样 owner 不能通过 withdrawUnsupportedTokens 把项目 LP 当成“无关误转 token”提走。
+        address pair = _getPair(p.tokenA, p.tokenB);
+        if (pair != address(0)) {
+            _markEverSupported(pair);
+        }
 
         if (p.amountA > amountAActual) {
             _refund(p.tokenA, msg.sender, p.amountA - amountAActual);
@@ -755,7 +768,8 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
         uint256 deadline
     ) external nonReentrant whenNotPaused returns (uint256 amountA, uint256 amountB) {
         require(lpToken != address(0), "lp zero");
-        require(to != address(0), "to zero");
+        _requireRecipient(to);
+
         require(liquidity > 0, "liquidity = 0");
         require(amountAMin > 0 && amountBMin > 0, "min zero");
 
@@ -764,6 +778,12 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
         address pair = _getPair(tokenA, tokenB);
         require(pair != address(0), "pair not exist");
         require(pair == lpToken, "LP mismatch");
+
+        // 大白话：提前检查 LP 余额，报错更清楚。
+        // 即使没有这行，safeTransferFrom 也会失败；这里主要是为了更早、更明确地提示。
+        require(IERC20(lpToken).balanceOf(msg.sender) >= liquidity, "LP balance insufficient");
+
+        _markEverSupported(pair);
 
         uint256 finalDeadline = _finalDeadline(deadline);
 
@@ -807,6 +827,7 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
      * - SNC
      * - USDT
      * - 任何曾经加入过白名单的 token
+     * - 通过本合约用过的项目相关 LP token
      *
      * 这么设计是为了避免 owner 通过提现函数拿走项目相关 token。
      */
@@ -814,16 +835,38 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
         address[] calldata tokens,
         address to
     ) external onlyOwner nonReentrant {
-        require(to != address(0), "to zero");
+        _requireRecipient(to);
 
         uint256 len = tokens.length;
-        require(len > 0 && len <= MAX_ARRAY_SIZE, "bad array length");
+        require(len > 0 && len <= MAX_WITHDRAW_ARRAY_SIZE, "bad array length");
 
+        // 大白话：
+        // 第一轮只做校验，不做转账。
+        // 这样如果数组里有重复地址、0 地址、项目相关 token，会直接失败，不会先转一半。
         for (uint256 i = 0; i < len; ) {
             address token = tokens[i];
 
             require(token != address(0), "token zero");
+            require(token.code.length > 0, "token no code");
             require(!everSupportedToken[token], "known token");
+
+            for (uint256 j = i + 1; j < len; ) {
+                require(token != tokens[j], "duplicate token");
+
+                unchecked {
+                    ++j;
+                }
+            }
+
+            unchecked {
+                ++i;
+            }
+        }
+
+        // 大白话：
+        // 第二轮才真正执行转账。
+        for (uint256 i = 0; i < len; ) {
+            address token = tokens[i];
 
             uint256 balance = IERC20(token).balanceOf(address(this));
 
@@ -844,9 +887,13 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
      * 大白话：
      * 本合约不做 ETH 交易。
      * 这个函数只是为了提取误转进来的 ETH。
+     *
+     * 注意：
+     * to 可以是普通钱包，也可以是合约钱包。
+     * 如果目标合约不能接收 ETH，这里会自动 revert。
      */
     function withdrawETH(address payable to) external onlyOwner nonReentrant {
-        require(to != address(0), "to zero");
+        _requireRecipient(to);
 
         uint256 amount = address(this).balance;
         require(amount > 0, "no ETH");
@@ -866,6 +913,21 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
     // ========== 内部函数：校验 ==========
 
     /**
+     * @dev 校验接收地址。
+     *
+     * 大白话：
+     * 1. 不能是 0 地址。
+     * 2. 不能是本合约地址。
+     *
+     * 不禁止合约地址：
+     * 因为很多用户的安全钱包、多签钱包、AA 钱包都是合约地址。
+     */
+    function _requireRecipient(address to) internal view {
+        require(to != address(0), "to zero");
+        require(to != address(this), "to self");
+    }
+
+    /**
      * @dev 校验两个 token 是否可以交易。
      */
     function _requireSupportedPair(address tokenA, address tokenB) internal view {
@@ -881,6 +943,7 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
      * path 至少 2 个地址，最多 5 个地址。
      * path 里的每个 token 都必须在白名单里。
      * 每一跳都必须有 pair。
+     * 整条路径里不能出现重复 token，比如 [A, B, A, C] 不允许。
      */
     function _requireSupportedPath(address[] memory path) internal view {
         uint256 len = path.length;
@@ -888,16 +951,24 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
         require(len >= 2, "path too short");
         require(len <= MAX_PATH_SIZE, "path too long");
 
-        require(path[0] != path[len - 1], "same token");
-
         for (uint256 i = 0; i < len; ) {
             address token = path[i];
 
             require(token != address(0), "path zero token");
             require(supportedToken[token], "path unsupported token");
 
+            // 大白话：
+            // 检查整条路径里不能有重复 token。
+            // MAX_PATH_SIZE 只有 5，所以 O(n^2) 循环没问题。
+            for (uint256 j = i + 1; j < len; ) {
+                require(token != path[j], "duplicate path token");
+
+                unchecked {
+                    ++j;
+                }
+            }
+
             if (i + 1 < len) {
-                require(token != path[i + 1], "same adjacent token");
                 require(_getPair(token, path[i + 1]) != address(0), "path pair not exist");
             }
 
@@ -950,12 +1021,27 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
 
         if (supported) {
             require(token.code.length > 0, "token no code");
-            everSupportedToken[token] = true;
+            _markEverSupported(token);
         }
 
         supportedToken[token] = supported;
 
         emit TokenSupportUpdated(token, supported);
+    }
+
+    /**
+     * @dev 标记为项目相关资产。
+     *
+     * 大白话：
+     * 被标记后，owner 不能通过 withdrawUnsupportedTokens 提走它。
+     */
+    function _markEverSupported(address token) internal {
+        require(token != address(0), "token zero");
+
+        if (!everSupportedToken[token]) {
+            everSupportedToken[token] = true;
+            emit KnownAssetMarked(token);
+        }
     }
 
     // ========== 内部函数：路径和报价 ==========
@@ -1174,6 +1260,7 @@ contract SwapTrade is Ownable2Step, ReentrancyGuard, Pausable {
 
         uint256 balanceAfter = IERC20(token).balanceOf(address(this));
 
+        require(balanceAfter >= balanceBefore, "bad token balance");
         require(balanceAfter - balanceBefore == amount, "fee token unsupported");
     }
 

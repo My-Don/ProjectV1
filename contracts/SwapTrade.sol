@@ -61,7 +61,7 @@ interface IUniswapV2Router02 {
 /**
  * @title SwapTrade
  *
- * @notice 基于 Uniswap V2 Router 的 ERC20 换币和流动性管理合约。
+ * @notice 基于 Uniswap V2 Router 的 ERC20 兑换和流动性管理合约。
  *
  * 大白话说明：
  * 1. 用户可以通过本合约换币。
